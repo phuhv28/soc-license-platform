@@ -1,11 +1,20 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
 CREATE TABLE tenants (
-    tenant_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    tenant_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       VARCHAR(255) NOT NULL,
+    status     VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_tenants_status
         CHECK (status IN ('ACTIVE', 'DISABLED'))
@@ -17,16 +26,21 @@ CREATE INDEX idx_tenants_status
 CREATE INDEX idx_tenants_name
     ON tenants (name);
 
+CREATE TRIGGER trg_tenants_updated_at
+BEFORE UPDATE ON tenants
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
 
 CREATE TABLE licenses (
     license_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    eps_quota INTEGER NOT NULL,
+    tenant_id  UUID NOT NULL,
+    eps_quota  INTEGER NOT NULL,
     start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    end_date   DATE NOT NULL,
+    status     VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_licenses_tenant
         FOREIGN KEY (tenant_id)
@@ -59,35 +73,44 @@ CREATE INDEX idx_licenses_end_date
 CREATE INDEX idx_licenses_start_end_date
     ON licenses (start_date, end_date);
 
+CREATE TRIGGER trg_licenses_updated_at
+BEFORE UPDATE ON licenses
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
 
 CREATE TABLE audit_logs (
-    audit_log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    actor VARCHAR(100) NOT NULL,
-    action VARCHAR(100) NOT NULL,
+    audit_log_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor         VARCHAR(100) NOT NULL,
+    action        VARCHAR(100) NOT NULL,
     resource_type VARCHAR(100) NOT NULL,
-    resource_id UUID,
-    before_value JSONB,
-    after_value JSONB,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resource_id   UUID,
+    before_value  JSONB,
+    after_value   JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_audit_logs_action
-        CHECK (action IN (
-            'CREATE_TENANT',
-            'UPDATE_TENANT',
-            'DISABLE_TENANT',
-            'CREATE_LICENSE',
-            'UPDATE_LICENSE',
-            'DISABLE_LICENSE',
-            'RESOLVE_ALERT',
-            'IGNORE_ALERT'
-        )),
+        CHECK (
+            action IN (
+                'CREATE_TENANT',
+                'UPDATE_TENANT',
+                'DISABLE_TENANT',
+                'CREATE_LICENSE',
+                'UPDATE_LICENSE',
+                'DISABLE_LICENSE',
+                'RESOLVE_ALERT',
+                'IGNORE_ALERT'
+            )
+        ),
 
     CONSTRAINT chk_audit_logs_resource_type
-        CHECK (resource_type IN (
-            'TENANT',
-            'LICENSE',
-            'ALERT'
-        ))
+        CHECK (
+            resource_type IN (
+                'TENANT',
+                'LICENSE',
+                'ALERT'
+            )
+        )
 );
 
 CREATE INDEX idx_audit_logs_actor
@@ -104,19 +127,19 @@ CREATE INDEX idx_audit_logs_created_at
 
 
 CREATE TABLE alerts (
-    alert_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    license_id UUID,
-    alert_type VARCHAR(100) NOT NULL,
-    severity VARCHAR(50) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
-    message TEXT NOT NULL,
+    alert_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         UUID NOT NULL,
+    license_id        UUID,
+    alert_type        VARCHAR(100) NOT NULL,
+    severity          VARCHAR(50) NOT NULL,
+    status            VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+    message           TEXT NOT NULL,
     threshold_percent INTEGER,
-    current_percent INTEGER,
-    triggered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    current_percent   INTEGER,
+    triggered_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at       TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_alerts_tenant
         FOREIGN KEY (tenant_id)
@@ -129,32 +152,44 @@ CREATE TABLE alerts (
         ON DELETE SET NULL,
 
     CONSTRAINT chk_alerts_type
-        CHECK (alert_type IN (
-            'LICENSE_EXPIRING_SOON',
-            'LICENSE_EXPIRED',
-            'USAGE_70_PERCENT',
-            'USAGE_100_PERCENT'
-        )),
+        CHECK (
+            alert_type IN (
+                'LICENSE_EXPIRING_SOON',
+                'LICENSE_EXPIRED',
+                'USAGE_70_PERCENT',
+                'USAGE_100_PERCENT'
+            )
+        ),
 
     CONSTRAINT chk_alerts_severity
-        CHECK (severity IN (
-            'INFO',
-            'WARNING',
-            'CRITICAL'
-        )),
+        CHECK (
+            severity IN (
+                'INFO',
+                'WARNING',
+                'CRITICAL'
+            )
+        ),
 
     CONSTRAINT chk_alerts_status
-        CHECK (status IN (
-            'OPEN',
-            'RESOLVED',
-            'IGNORED'
-        )),
+        CHECK (
+            status IN (
+                'OPEN',
+                'RESOLVED',
+                'IGNORED'
+            )
+        ),
 
     CONSTRAINT chk_alerts_threshold_percent
-        CHECK (threshold_percent IS NULL OR threshold_percent >= 0),
+        CHECK (
+            threshold_percent IS NULL
+            OR threshold_percent >= 0
+        ),
 
     CONSTRAINT chk_alerts_current_percent
-        CHECK (current_percent IS NULL OR current_percent >= 0)
+        CHECK (
+            current_percent IS NULL
+            OR current_percent >= 0
+        )
 );
 
 CREATE INDEX idx_alerts_tenant_id
@@ -175,3 +210,8 @@ CREATE INDEX idx_alerts_triggered_at
 CREATE UNIQUE INDEX ux_alerts_one_open_per_tenant_type
     ON alerts (tenant_id, alert_type)
     WHERE status = 'OPEN';
+
+CREATE TRIGGER trg_alerts_updated_at
+BEFORE UPDATE ON alerts
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
