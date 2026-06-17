@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: soc-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: soc_license
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d soc_license"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: soc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  management-api-service:
+    build:
+      context: ./apps/management-api-service
+    container_name: management-api-service
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: soc_license
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  collector-service:
+    build:
+      context: ./apps/collector-service
+    container_name: collector-service
+    ports:
+      - "8081:8081"
+    environment:
+      SERVER_PORT: 8081
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: soc_license
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./apps/frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_MANAGEMENT_API_URL: http://localhost:8080
+      VITE_COLLECTOR_API_URL: http://localhost:8081
+    depends_on:
+      - management-api-service
+      - collector-service
+
+  event-producer:
+    build:
+      context: ./apps/event-producer
+    container_name: event-producer
+    environment:
+      COLLECTOR_URL: http://collector-service:8081
+      TENANT_ID: tenant-a
+      EPS: 100
+      BATCH_SIZE: 50
+    depends_on:
+      - collector-service
+
+volumes:
+  postgres_data:
+  redis_data:
