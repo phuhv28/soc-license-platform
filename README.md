@@ -256,3 +256,161 @@ Next work will continue from the remaining MVP scope:
 - Usage APIs
 - CSV reporting
 - Dashboard implementation
+
+## 14. Manual Test With Swagger
+
+Open the Management API Swagger UI:
+
+```text
+http://localhost:8080/swagger-ui.html
+```
+
+### 1. Create tenant
+
+```text
+POST /api/v1/tenants
+```
+
+Request body:
+
+```json
+{
+  "name": "Tenant A"
+}
+```
+
+Expected result:
+
+- Tenant is saved in PostgreSQL
+- Audit log `CREATE_TENANT` is created
+
+Copy the returned `tenantId` for the next step.
+
+### 2. Create license
+
+```text
+POST /api/v1/licenses
+```
+
+Request body:
+
+```json
+{
+  "tenantId": "uuid-cua-tenant",
+  "epsQuota": 100,
+  "startDate": "2026-06-01",
+  "endDate": "2026-12-31"
+}
+```
+
+Expected result:
+
+- License is saved in PostgreSQL
+- Audit log `CREATE_LICENSE` is created
+- Redis contains `quota:{tenant_id} = 100`
+
+Copy the returned `licenseId` for update and disable tests.
+
+### 3. Check Redis quota
+
+Open Redis CLI:
+
+```bash
+docker exec -it soc-redis redis-cli
+```
+
+Run:
+
+```text
+GET quota:{tenant_id}
+```
+
+Expected result:
+
+```text
+"100"
+```
+
+### 4. Update license
+
+```text
+PUT /api/v1/licenses/{licenseId}
+```
+
+Request body:
+
+```json
+{
+  "epsQuota": 200,
+  "startDate": "2026-06-01",
+  "endDate": "2026-12-31",
+  "status": "ACTIVE"
+}
+```
+
+Expected result:
+
+- License is updated in PostgreSQL
+- Audit log `UPDATE_LICENSE` is created
+- Redis contains `quota:{tenant_id} = 200`
+
+Redis check:
+
+```text
+GET quota:{tenant_id}
+```
+
+Expected result:
+
+```text
+"200"
+```
+
+### 5. Disable license
+
+```text
+DELETE /api/v1/licenses/{licenseId}
+```
+
+Expected result:
+
+- License status becomes `DISABLED`
+- Audit log `DISABLE_LICENSE` is created
+- Redis key `quota:{tenant_id}` is deleted
+
+Redis check:
+
+```text
+GET quota:{tenant_id}
+```
+
+Expected result:
+
+```text
+(nil)
+```
+
+### 6. View audit logs
+
+```text
+GET /api/v1/audit-logs
+```
+
+Expected result includes:
+
+- `CREATE_TENANT`
+- `CREATE_LICENSE`
+- `UPDATE_LICENSE`
+- `DISABLE_LICENSE`
+
+### 7. Check expiring-soon licenses
+
+```text
+GET /api/v1/licenses/expiring-soon?days=7
+```
+
+Expected result:
+
+- Returns `ACTIVE` licenses whose `endDate` is between today and today plus 7 days
+
+Note: the sample license above has `endDate = 2026-12-31` and is disabled in step 5, so it should not appear in this result. To test a positive result, create or update an `ACTIVE` license with `endDate` inside the requested date window.
