@@ -1,5 +1,10 @@
 package com.vcs.management.tenant.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vcs.management.audit.service.AuditLogService;
+import com.vcs.management.common.enums.AuditAction;
+import com.vcs.management.common.enums.ResourceType;
 import com.vcs.management.common.enums.TenantStatus;
 import com.vcs.management.common.exception.ResourceNotFoundException;
 import com.vcs.management.tenant.dto.CreateTenantRequest;
@@ -16,18 +21,38 @@ import java.util.UUID;
 @Service
 public class TenantService {
 
-    private final TenantRepository tenantRepository;
+    private static final String DEFAULT_ACTOR = "admin";
 
-    public TenantService(TenantRepository tenantRepository) {
+    private final TenantRepository tenantRepository;
+    private final AuditLogService auditLogService;
+    private final ObjectMapper objectMapper;
+
+    public TenantService(
+            TenantRepository tenantRepository,
+            AuditLogService auditLogService,
+            ObjectMapper objectMapper
+    ) {
         this.tenantRepository = tenantRepository;
+        this.auditLogService = auditLogService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
     public TenantResponse createTenant(CreateTenantRequest request) {
         Tenant tenant = new Tenant(normalizeName(request.name()));
-        Tenant savedTenant = tenantRepository.save(tenant);
+        Tenant savedTenant = tenantRepository.saveAndFlush(tenant);
+        TenantResponse response = TenantResponse.from(savedTenant);
 
-        return TenantResponse.from(savedTenant);
+        auditLogService.writeAuditLog(
+                DEFAULT_ACTOR,
+                AuditAction.CREATE_TENANT,
+                ResourceType.TENANT,
+                savedTenant.getTenantId(),
+                null,
+                toJson(response)
+        );
+
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -46,21 +71,43 @@ public class TenantService {
     @Transactional
     public TenantResponse updateTenant(UUID tenantId, UpdateTenantRequest request) {
         Tenant tenant = findTenant(tenantId);
+        String beforeValue = toJson(TenantResponse.from(tenant));
 
         tenant.setName(normalizeName(request.name()));
-        Tenant updatedTenant = tenantRepository.save(tenant);
+        Tenant updatedTenant = tenantRepository.saveAndFlush(tenant);
+        TenantResponse response = TenantResponse.from(updatedTenant);
 
-        return TenantResponse.from(updatedTenant);
+        auditLogService.writeAuditLog(
+                DEFAULT_ACTOR,
+                AuditAction.UPDATE_TENANT,
+                ResourceType.TENANT,
+                updatedTenant.getTenantId(),
+                beforeValue,
+                toJson(response)
+        );
+
+        return response;
     }
 
     @Transactional
     public TenantResponse disableTenant(UUID tenantId) {
         Tenant tenant = findTenant(tenantId);
+        String beforeValue = toJson(TenantResponse.from(tenant));
 
         tenant.setStatus(TenantStatus.DISABLED);
-        Tenant disabledTenant = tenantRepository.save(tenant);
+        Tenant disabledTenant = tenantRepository.saveAndFlush(tenant);
+        TenantResponse response = TenantResponse.from(disabledTenant);
 
-        return TenantResponse.from(disabledTenant);
+        auditLogService.writeAuditLog(
+                DEFAULT_ACTOR,
+                AuditAction.DISABLE_TENANT,
+                ResourceType.TENANT,
+                disabledTenant.getTenantId(),
+                beforeValue,
+                toJson(response)
+        );
+
+        return response;
     }
 
     private Tenant findTenant(UUID tenantId) {
@@ -70,5 +117,13 @@ public class TenantService {
 
     private String normalizeName(String name) {
         return name.trim();
+    }
+
+    private String toJson(TenantResponse response) {
+        try {
+            return objectMapper.writeValueAsString(response);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize tenant audit snapshot", ex);
+        }
     }
 }
