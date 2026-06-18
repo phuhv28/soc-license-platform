@@ -151,7 +151,41 @@ Collector Service Swagger:
 http://localhost:8081/swagger-ui.html
 ```
 
-## 9. Frontend
+## 9. Management API Endpoints
+
+Tenant APIs:
+
+```text
+POST   /api/v1/tenants
+GET    /api/v1/tenants
+GET    /api/v1/tenants/{tenantId}
+PUT    /api/v1/tenants/{tenantId}
+DELETE /api/v1/tenants/{tenantId}
+```
+
+`DELETE /api/v1/tenants/{tenantId}` disables the tenant instead of hard deleting it.
+
+License APIs:
+
+```text
+POST   /api/v1/licenses
+GET    /api/v1/licenses
+GET    /api/v1/licenses/{licenseId}
+GET    /api/v1/licenses/tenant/{tenantId}
+PUT    /api/v1/licenses/{licenseId}
+DELETE /api/v1/licenses/{licenseId}
+GET    /api/v1/licenses/expiring-soon?days=7
+```
+
+`DELETE /api/v1/licenses/{licenseId}` disables the license instead of hard deleting it.
+
+Audit log API:
+
+```text
+GET /api/v1/audit-logs
+```
+
+## 10. Frontend
 
 Frontend URL:
 
@@ -159,7 +193,7 @@ Frontend URL:
 http://localhost:3000
 ```
 
-## 10. Docker Compose Services
+## 11. Docker Compose Services
 
 ```text
 postgres
@@ -170,9 +204,9 @@ frontend
 event-producer
 ```
 
-## 11. Current Phase Status
+## 12. Current Phase Status
 
-Phase 1 focuses on project skeleton and infrastructure setup.
+Phase 2 focuses on the Control Plane foundation.
 
 Completed:
 
@@ -189,26 +223,36 @@ Completed:
 - Verified Swagger UI
 - Verified frontend page
 - Verified event-producer heartbeat
+- Added PostgreSQL schema for tenants, licenses, audit logs and alerts
+- Added Tenant CRUD APIs with disable flow
+- Added AuditLog module and `GET /api/v1/audit-logs`
+- Added audit logging for tenant create/update/disable
+- Added License CRUD APIs with disable flow
+- Added license expiring-soon API
+- Added license business validation
+- Added audit logging for license create/update/disable
+- Added Redis quota sync with key format `quota:{tenant_id}`
+- Added Alert entity and repository mapping for the existing `alerts` table
 
 Not implemented yet:
 
-- License CRUD
-- Audit log
-- Quota sync to Redis
 - Collector batch event API
 - Token bucket
 - EPS Redis counters
-- Alerts
+- Full alert logic for 70%, 100%, resolve and ignore
 - Usage APIs
 - CSV report
 - Real dashboard
 
-## 12. Next Phase
+## 13. Next Phase
 
-Phase 2 will implement the Control Plane foundation:
+Next work will continue from the remaining MVP scope:
 
-- Database schema
-- License entity
-- License CRUD APIs
-- Audit log
-- Sync tenant EPS quota to Redis
+- Collector batch event API
+- Redis quota read path in collector-service
+- Token bucket EPS enforcement
+- EPS usage counters
+- Alert generation and alert management APIs
+- Usage APIs
+- CSV reporting
+- Dashboard implementation
