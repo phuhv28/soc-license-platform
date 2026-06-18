@@ -12,6 +12,12 @@ public interface LicenseRepository extends JpaRepository<License, UUID> {
 
     boolean existsByTenantTenantIdAndStatus(UUID tenantId, LicenseStatus status);
 
+    boolean existsByTenantTenantIdAndStatusAndLicenseIdNot(
+            UUID tenantId,
+            LicenseStatus status,
+            UUID licenseId
+    );
+
     List<License> findAllByOrderByCreatedAtDesc();
 
     List<License> findAllByTenantTenantIdOrderByCreatedAtDesc(UUID tenantId);

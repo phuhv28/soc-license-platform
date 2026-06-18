@@ -6,9 +6,11 @@ import com.vcs.management.audit.service.AuditLogService;
 import com.vcs.management.common.enums.AuditAction;
 import com.vcs.management.common.enums.LicenseStatus;
 import com.vcs.management.common.enums.ResourceType;
+import com.vcs.management.common.enums.TenantStatus;
 import com.vcs.management.common.exception.BadRequestException;
 import com.vcs.management.common.exception.ConflictException;
 import com.vcs.management.common.exception.ResourceNotFoundException;
+import com.vcs.management.common.redis.RedisQuotaSyncService;
 import com.vcs.management.license.dto.CreateLicenseRequest;
 import com.vcs.management.license.dto.LicenseResponse;
 import com.vcs.management.license.dto.UpdateLicenseRequest;
@@ -31,24 +33,28 @@ public class LicenseService {
     private final LicenseRepository licenseRepository;
     private final TenantRepository tenantRepository;
     private final AuditLogService auditLogService;
+    private final RedisQuotaSyncService redisQuotaSyncService;
     private final ObjectMapper objectMapper;
 
     public LicenseService(
             LicenseRepository licenseRepository,
             TenantRepository tenantRepository,
             AuditLogService auditLogService,
+            RedisQuotaSyncService redisQuotaSyncService,
             ObjectMapper objectMapper
     ) {
         this.licenseRepository = licenseRepository;
         this.tenantRepository = tenantRepository;
         this.auditLogService = auditLogService;
+        this.redisQuotaSyncService = redisQuotaSyncService;
         this.objectMapper = objectMapper;
     }
 
     @Transactional
     public LicenseResponse createLicense(CreateLicenseRequest request) {
-        validateDateRange(request.startDate(), request.endDate());
+        validateCreateRequest(request);
         Tenant tenant = findTenant(request.tenantId());
+        validateTenantIsActive(tenant);
         ensureTenantHasNoActiveLicense(request.tenantId());
 
         License license = new License(tenant, request.epsQuota(), request.startDate(), request.endDate());
@@ -62,6 +68,11 @@ public class LicenseService {
                 savedLicense.getLicenseId(),
                 null,
                 toJson(response)
+        );
+
+        redisQuotaSyncService.syncQuota(
+                savedLicense.getTenant().getTenantId(),
+                savedLicense.getEpsQuota()
         );
 
         return response;
@@ -94,13 +105,15 @@ public class LicenseService {
 
     @Transactional
     public LicenseResponse updateLicense(UUID licenseId, UpdateLicenseRequest request) {
-        validateDateRange(request.startDate(), request.endDate());
         License license = findLicense(licenseId);
         String beforeValue = toJson(LicenseResponse.from(license));
+        validateUpdateRequest(request);
+        validateCanUseStatus(license, request.status());
 
         license.setEpsQuota(request.epsQuota());
         license.setStartDate(request.startDate());
         license.setEndDate(request.endDate());
+        license.setStatus(request.status());
         License updatedLicense = licenseRepository.saveAndFlush(license);
         LicenseResponse response = LicenseResponse.from(updatedLicense);
 
@@ -112,6 +125,8 @@ public class LicenseService {
                 beforeValue,
                 toJson(response)
         );
+
+        syncOrRemoveQuotaInRedis(updatedLicense);
 
         return response;
     }
@@ -133,6 +148,8 @@ public class LicenseService {
                 beforeValue,
                 toJson(response)
         );
+
+        redisQuotaSyncService.removeQuota(disabledLicense.getTenant().getTenantId());
 
         return response;
     }
@@ -164,8 +181,41 @@ public class LicenseService {
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant not found"));
     }
 
+    private void validateCreateRequest(CreateLicenseRequest request) {
+        validateDateRange(request.startDate(), request.endDate());
+    }
+
+    private void validateUpdateRequest(UpdateLicenseRequest request) {
+        validateDateRange(request.startDate(), request.endDate());
+    }
+
+    private void validateTenantIsActive(Tenant tenant) {
+        if (tenant.getStatus() != TenantStatus.ACTIVE) {
+            throw new BadRequestException("Tenant must be active to use a license");
+        }
+    }
+
+    private void validateCanUseStatus(License license, LicenseStatus status) {
+        if (status != LicenseStatus.ACTIVE) {
+            return;
+        }
+
+        validateTenantIsActive(license.getTenant());
+        ensureTenantHasNoOtherActiveLicense(license.getTenant().getTenantId(), license.getLicenseId());
+    }
+
     private void ensureTenantHasNoActiveLicense(UUID tenantId) {
         if (licenseRepository.existsByTenantTenantIdAndStatus(tenantId, LicenseStatus.ACTIVE)) {
+            throw new ConflictException("Tenant already has an active license");
+        }
+    }
+
+    private void ensureTenantHasNoOtherActiveLicense(UUID tenantId, UUID licenseId) {
+        if (licenseRepository.existsByTenantTenantIdAndStatusAndLicenseIdNot(
+                tenantId,
+                LicenseStatus.ACTIVE,
+                licenseId
+        )) {
             throw new ConflictException("Tenant already has an active license");
         }
     }
@@ -174,6 +224,18 @@ public class LicenseService {
         if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
             throw new BadRequestException("Start date must be before or equal to end date");
         }
+    }
+
+    private void syncOrRemoveQuotaInRedis(License license) {
+        if (license.getStatus() == LicenseStatus.ACTIVE) {
+            redisQuotaSyncService.syncQuota(
+                    license.getTenant().getTenantId(),
+                    license.getEpsQuota()
+            );
+            return;
+        }
+
+        redisQuotaSyncService.removeQuota(license.getTenant().getTenantId());
     }
 
     private String toJson(LicenseResponse response) {

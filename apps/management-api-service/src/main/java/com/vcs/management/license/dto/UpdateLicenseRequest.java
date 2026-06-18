@@ -1,5 +1,6 @@
 package com.vcs.management.license.dto;
 
+import com.vcs.management.common.enums.LicenseStatus;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
@@ -14,6 +15,9 @@ public record UpdateLicenseRequest(
         LocalDate startDate,
 
         @NotNull(message = "End date is required")
-        LocalDate endDate
+        LocalDate endDate,
+
+        @NotNull(message = "License status is required")
+        LicenseStatus status
 ) {
 }
