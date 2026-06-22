@@ -90,11 +90,12 @@ services:
     container_name: event-producer
     environment:
       COLLECTOR_URL: http://collector-service:8081
-      TENANT_ID: tenant-a
+      TENANT_IDS: tenant-a
       EPS: 100
       BATCH_SIZE: 50
     depends_on:
       - collector-service
+      - management-api-service
 
 volumes:
   postgres_data:
