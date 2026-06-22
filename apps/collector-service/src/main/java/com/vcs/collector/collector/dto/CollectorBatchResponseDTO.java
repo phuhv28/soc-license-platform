@@ -1,5 +1,6 @@
 package com.vcs.collector.collector.dto;
 
+import com.vcs.collector.common.enums.ProcessingDecision;
 import java.time.Instant;
 
 /**
@@ -10,6 +11,7 @@ public record CollectorBatchResponseDTO(
         long received,
         long accepted,
         long dropped,
-        Instant processedAt
+        Instant processedAt,
+        ProcessingDecision decision
 ) {
 }
