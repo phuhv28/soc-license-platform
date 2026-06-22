@@ -90,7 +90,7 @@ public class CollectorServiceImpl implements CollectorService {
         usageCounterService.incrementCounters(tenantId, received, accepted, dropped);
 
         // Determine decision
-        ProcessingDecision decision = determineDecision(received, accepted, dropped);
+        ProcessingDecision decision = determineDecision(received, accepted, dropped, acceptableCount);
 
         return new CollectorBatchResponseDTO(
                 tenantId,
@@ -150,15 +150,20 @@ public class CollectorServiceImpl implements CollectorService {
      * @param received total events received
      * @param accepted events accepted
      * @param dropped events dropped
+     * @param acceptableCount max acceptable count from token bucket
      * @return processing decision
      */
-    private ProcessingDecision determineDecision(long received, long accepted, long dropped) {
+    private ProcessingDecision determineDecision(long received, long accepted, long dropped, long acceptableCount) {
         if (accepted == received) {
             return ProcessingDecision.ALL_ACCEPTED;
-        } else if (accepted == 0) {
-            return ProcessingDecision.ALL_INVALID;
-        } else {
-            return ProcessingDecision.PARTIAL_VALIDATION;
         }
+        if (acceptableCount < received) {
+            return ProcessingDecision.OVER_QUOTA;
+        }
+        if (accepted == 0) {
+            return ProcessingDecision.ALL_INVALID;
+        }
+        return ProcessingDecision.PARTIAL_VALIDATION;
     }
 }
+

@@ -77,6 +77,19 @@ public class Alert {
     protected Alert() {
     }
 
+    public Alert(Tenant tenant, License license, AlertType alertType, AlertSeverity severity,
+                 String message, Integer thresholdPercent, Integer currentPercent) {
+        this.tenant = tenant;
+        this.license = license;
+        this.alertType = alertType;
+        this.severity = severity;
+        this.status = AlertStatus.OPEN;
+        this.message = message;
+        this.thresholdPercent = thresholdPercent;
+        this.currentPercent = currentPercent;
+        this.triggeredAt = Instant.now();
+    }
+
     public UUID getAlertId() {
         return alertId;
     }
@@ -127,5 +140,17 @@ public class Alert {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public void setStatus(AlertStatus status) {
+        this.status = status;
+    }
+
+    public void setResolvedAt(Instant resolvedAt) {
+        this.resolvedAt = resolvedAt;
+    }
+
+    public void setCurrentPercent(Integer currentPercent) {
+        this.currentPercent = currentPercent;
     }
 }
