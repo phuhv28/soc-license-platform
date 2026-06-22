@@ -3,7 +3,6 @@ package com.vcs.management.alert.scheduler;
 import com.vcs.management.alert.service.AlertService;
 import com.vcs.management.common.enums.LicenseStatus;
 import com.vcs.management.common.enums.TenantStatus;
-import com.vcs.management.license.entity.License;
 import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
