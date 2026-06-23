@@ -1,416 +1,504 @@
 # SOC EPS License Management Platform
 
-## 1. Project Overview
+A multi-tenant SOC/SIEM platform for managing EPS (Events Per Second) licenses, enforcing usage quotas in real-time, and providing operational dashboards with alerting capabilities.
 
-This project implements an EPS-based license management and enforcement subsystem for a multi-tenant SOC/SIEM platform.
+---
 
-The system is split into two main planes:
+## Table of Contents
 
-- Control Plane: manages licenses, usage APIs, alerts, reports and audit logs.
-- Data Plane: receives event batches, checks tenant quota, enforces EPS limit and updates usage counters.
+- [System Flow](#system-flow)
+- [Architecture](#architecture)
+- [Services](#services)
+- [Tech Stack](#tech-stack)
+- [Redis Key Schema](#redis-key-schema)
+- [Database Schema](#database-schema)
+- [API Reference](#api-reference)
+- [Getting Started](#getting-started)
+- [Testing](#testing)
+- [Manual Testing Guide](#manual-testing-guide)
 
-## 2. MVP Scope
+---
 
-### Control Plane
+## System Flow
 
-Implemented by `management-api-service`.
+### Overview
 
-Responsibilities:
+The platform operates on a **Control Plane / Data Plane** split architecture. Here's how all the pieces work together:
 
-- License CRUD
-- License expiring-soon API
-- Usage API
-- Alert API
-- Report CSV
-- Audit log
-- Sync tenant quota to Redis
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              CONTROL PLANE                                  │
+│                                                                              │
+│  ┌──────────┐     ┌──────────────────────────┐     ┌──────────────────────┐  │
+│  │ Frontend │────>│  Management API Service   │────>│     PostgreSQL       │  │
+│  │ :3000    │<────│  :8080                    │<────│     :5432            │  │
+│  └──────────┘     │                          │     └──────────────────────┘  │
+│                   │  • License CRUD          │                               │
+│                   │  • Tenant CRUD           │     ┌──────────────────────┐  │
+│                   │  • Alert Management      │────>│       Redis          │  │
+│                   │  • Usage APIs            │<────│       :6379          │  │
+│                   │  • CSV Reports           │     │                      │  │
+│                   │  • Audit Logging         │     │  • quota:{tenantId}  │  │
+│                   │  • Schedulers            │     │  • usage counters    │  │
+│                   └──────────────────────────┘     │  • token bucket      │  │
+│                                                    └──────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                               DATA PLANE                                     │
+│                                                                              │
+│  ┌──────────────┐     ┌──────────────────────────┐          ▲               │
+│  │Event Producer│────>│   Collector Service       │──────────┘               │
+│  │(Mock Agent)  │     │   :8081                   │                          │
+│  └──────────────┘     │                          │                          │
+│                       │  • Receive batch events  │     ┌──────────────────┐  │
+│                       │  • Read quota from Redis │────>│ Mock Downstream  │  │
+│                       │  • Token bucket enforce  │     │ (placeholder)    │  │
+│                       │  • Update EPS counters   │     └──────────────────┘  │
+│                       └──────────────────────────┘                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Data Plane
+### Step-by-Step Flow
 
-Implemented by `collector-service`.
+#### 1. Admin tạo Tenant & License (Control Plane)
 
-Responsibilities:
+```
+Admin (Frontend) → POST /api/v1/tenants         → PostgreSQL (tenants table)
+Admin (Frontend) → POST /api/v1/licenses         → PostgreSQL (licenses table)
+                                                  → Redis SET quota:{tenantId} = epsQuota
+```
 
-- Receive JSON batch events
-- Read tenant quota from Redis
-- Apply token bucket
-- Accept/drop events based on EPS quota
-- Update Redis EPS counters
-- Trigger usage alerts
+Khi admin tạo license, hệ thống **tự động sync EPS quota vào Redis** dưới key `quota:{tenantId}`. Đây là cầu nối giữa Control Plane và Data Plane — collector-service chỉ cần đọc Redis, không cần gọi API sang management-api-service.
+
+#### 2. Event Producer gửi events (Data Plane)
+
+```
+Event Producer → POST /api/v1/collector/events/batch → Collector Service
+                 {
+                   "tenantId": "uuid",
+                   "events": [{ eventId, eventType, timestamp, payload, metadata }, ...]
+                 }
+```
+
+Event Producer mô phỏng agent/sensor thực tế, gửi batch events liên tục theo target EPS đã cấu hình. Hỗ trợ multi-tenant qua biến `TENANT_IDS`.
+
+#### 3. Collector xử lý events (Data Plane — 4 Rules)
+
+```
+Rule 1: Redis GET quota:{tenantId}
+        → Không có quota? → DROP ALL → ProcessingDecision = NO_ACTIVE_LICENSE
+
+Rule 2: Token Bucket kiểm tra
+        → Tính available tokens = old_tokens + (elapsed_seconds × quota_eps)
+        → acceptableCount = min(eventCount, availableTokens)
+        → Vượt quota? → DROP phần vượt → ProcessingDecision = OVER_QUOTA
+
+Rule 3: Validate từng event (eventId, tenantId, eventType, timestamp, payload)
+        → Invalid? → DROP → ProcessingDecision = PARTIAL_VALIDATION / ALL_INVALID
+
+Rule 4: Cập nhật usage counters (LUÔN LUÔN, kể cả khi drop hết)
+        → Redis INCR usage:{tenantId}:received:1m:{yyyyMMddHHmm}
+        → Redis INCR usage:{tenantId}:accepted:1m:{yyyyMMddHHmm}
+        → Redis INCR usage:{tenantId}:dropped:1m:{yyyyMMddHHmm}
+        → Redis INCR usage:{tenantId}:*:1d:{yyyyMMdd}
+```
+
+**Token Bucket Algorithm:**
+- Capacity = quota EPS (ví dụ 100 tokens)
+- Refill rate = quota EPS tokens/giây
+- Mỗi event tiêu thụ 1 token
+- State lưu trong Redis: `bucket:{tenantId}:tokens` + `bucket:{tenantId}:last_refill_epoch_ms`
+
+#### 4. Schedulers kiểm tra và tạo alerts (Control Plane)
+
+```
+AlertTriggerScheduler (mỗi 60 giây):
+  → Scan tất cả active tenants
+  → Đọc Redis: usage counters → tính currentEps = accepted_1m / 60
+  → Đọc Redis: quota:{tenantId}
+  → usagePercent = (currentEps / quota) × 100
+  → ≥ 70%?  → Tạo USAGE_70_PERCENT alert (DEDUP: chỉ tạo nếu chưa có OPEN alert)
+  → ≥ 100%? → Tạo USAGE_100_PERCENT alert
+  → < 70%?  → Auto-resolve OPEN alerts
+
+LicenseExpirationScheduler (mỗi ngày 8h sáng):
+  → Query licenses: status=ACTIVE AND endDate BETWEEN today AND today+7
+  → Tạo LICENSE_EXPIRING_SOON alert (DEDUP)
+```
+
+#### 5. Frontend hiển thị Dashboard (Control Plane)
+
+```
+Admin Dashboard:
+  → GET /api/v1/usage/summary       → Tất cả tenants + EPS + % usage
+  → GET /api/v1/alerts?status=OPEN  → Danh sách cảnh báo
+  → GET /api/v1/licenses/expiring-soon → License sắp hết hạn
+
+Tenant Dashboard:
+  → GET /api/v1/usage/{tenantId}/current  → EPS hiện tại, quota, dropped today
+  → GET /api/v1/usage/{tenantId}/history  → 24h time-series cho biểu đồ
+  → GET /api/v1/alerts?tenantId=X         → Alerts của tenant
+  → GET /api/v1/reports/usage/csv         → Export CSV báo cáo
+```
+
+#### 6. Data Flow Diagram
+
+```
+                    ┌─────────────────┐
+                    │  Event Producer  │
+                    │   (Mock Agent)   │
+                    └────────┬────────┘
+                             │ POST /events/batch
+                             ▼
+                    ┌─────────────────┐        ┌───────────┐
+                    │    Collector     │───────>│   Redis   │
+                    │    Service      │<───────│           │
+                    └────────┬────────┘  R/W   │ • quota   │
+                             │                  │ • tokens  │
+                       accepted events          │ • usage   │
+                             │                  └─────┬─────┘
+                             ▼                        │ READ
+                    ┌─────────────────┐        ┌──────┴──────┐
+                    │ Mock Downstream │        │ Management  │
+                    │  (placeholder)  │        │ API Service │
+                    └─────────────────┘        └──────┬──────┘
+                                                      │ R/W
+                                               ┌──────┴──────┐
+                                               │ PostgreSQL  │
+                                               │ • tenants   │
+                                               │ • licenses  │
+                                               │ • alerts    │
+                                               │ • audit_logs│
+                                               └─────────────┘
+```
+
+---
+
+## Architecture
+
+### Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **Control/Data Plane split** | Collector (hot path) chỉ dùng Redis, không gọi DB → latency thấp |
+| **Redis là cầu nối** | Quota sync từ Control → Data Plane qua `quota:{tenantId}` key |
+| **Token Bucket trong Redis** | Atomic, persistent, hỗ trợ multi-instance trong tương lai |
+| **Scheduler-based alerts** | Tách alert trigger khỏi collector hot path, không ảnh hưởng throughput |
+| **Usage counters dùng Redis INCR** | Atomic, non-blocking, tự động TTL để cleanup dữ liệu cũ |
 
 ### Mocked Components
 
-The following production components are mocked in this MVP:
+Các component production được mock trong MVP:
 
-- Real Agent
-- API Gateway
-- Ingestion Gateway
-- Downstream SOC pipeline
+| Production Component | Mock |
+|---|---|
+| Real Agent/Sensor | `event-producer` |
+| API Gateway | Direct HTTP calls |
+| Ingestion Gateway | Direct HTTP to collector |
+| Downstream SOC pipeline | `sendToDownstream()` placeholder |
 
-Instead, this project uses:
+---
 
-- `event-producer` as mock Agent/Ingestion Gateway
-- mock downstream inside Collector
-
-## 3. Architecture
-
-```text
-event-producer
-      |
-      v
-collector-service  ---> Redis
-      |
-      v
-mock downstream
-
-frontend
-      |
-      v
-management-api-service ---> PostgreSQL
-                       ---> Redis
-```
-
-## 4. Services
+## Services
 
 | Service | Port | Description |
 |---|---:|---|
-| management-api-service | 8080 | Control Plane API |
-| collector-service | 8081 | Data Plane Collector |
-| frontend | 3000 | Dashboard UI |
-| postgres | 5432 | Main database |
-| redis | 6379 | Quota cache, token bucket, EPS counters |
-| event-producer | - | Mock event generator |
+| management-api-service | 8080 | Control Plane — License, Tenant, Alert, Usage, Report APIs |
+| collector-service | 8081 | Data Plane — Batch event processing, Token Bucket, EPS Counters |
+| frontend | 3000 | React Dashboard — Admin & Tenant views |
+| postgres | 5432 | PostgreSQL — Tenants, Licenses, Alerts, Audit Logs |
+| redis | 6379 | Redis — Quota cache, Token Bucket state, EPS Counters |
+| event-producer | — | Mock event generator (configurable EPS, multi-tenant) |
 
-## 5. Tech Stack
+---
 
-- Java 25
-- Spring Boot
-- Maven
-- PostgreSQL
-- Redis
-- React + Vite + TypeScript
-- Docker Compose
-- Swagger/OpenAPI
+## Tech Stack
 
-## 6. Run Project
+| Layer | Technology |
+|---|---|
+| Backend | Java 25, Spring Boot, Spring Data JPA, Spring Data Redis |
+| Build | Maven |
+| Database | PostgreSQL 16 |
+| Cache/State | Redis 7 |
+| Frontend | React 19, TypeScript, Vite, Recharts |
+| Infra | Docker, Docker Compose |
+| API Docs | Swagger / OpenAPI (springdoc) |
+| Testing | JUnit 5, Mockito |
 
-From the root directory:
+---
+
+## Redis Key Schema
+
+| Key Pattern | Type | TTL | Description |
+|---|---|---|---|
+| `quota:{tenantId}` | String | None | EPS quota synced from license |
+| `bucket:{tenantId}:tokens` | String | 24h | Available tokens for rate limiting |
+| `bucket:{tenantId}:last_refill_epoch_ms` | String | 24h | Last refill timestamp |
+| `usage:{tenantId}:received:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events received per minute |
+| `usage:{tenantId}:accepted:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events accepted per minute |
+| `usage:{tenantId}:dropped:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events dropped per minute |
+| `usage:{tenantId}:received:1d:{yyyyMMdd}` | String (counter) | 90d | Events received per day |
+| `usage:{tenantId}:accepted:1d:{yyyyMMdd}` | String (counter) | 90d | Events accepted per day |
+| `usage:{tenantId}:dropped:1d:{yyyyMMdd}` | String (counter) | 90d | Events dropped per day |
+
+---
+
+## Database Schema
+
+```sql
+tenants (tenant_id UUID PK, name, status, created_at, updated_at)
+licenses (license_id UUID PK, tenant_id FK, eps_quota, start_date, end_date, status, created_at, updated_at)
+alerts (alert_id UUID PK, tenant_id FK, license_id FK nullable, alert_type, severity, status, message, threshold_percent, current_percent, triggered_at, resolved_at, created_at, updated_at)
+audit_logs (audit_log_id UUID PK, actor, action, resource_type, resource_id, before_value JSONB, after_value JSONB, created_at)
+```
+
+Full schema: `apps/management-api-service/src/main/resources/db/schema_v1.sql`
+
+---
+
+## API Reference
+
+### Management API (`:8080`)
+
+#### Tenant APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/tenants` | Create tenant |
+| `GET` | `/api/v1/tenants` | List all tenants |
+| `GET` | `/api/v1/tenants/{tenantId}` | Get tenant by ID |
+| `PUT` | `/api/v1/tenants/{tenantId}` | Update tenant |
+| `DELETE` | `/api/v1/tenants/{tenantId}` | Disable tenant (soft delete) |
+
+#### License APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/licenses` | Create license (syncs quota to Redis) |
+| `GET` | `/api/v1/licenses` | List all licenses |
+| `GET` | `/api/v1/licenses/{licenseId}` | Get license by ID |
+| `GET` | `/api/v1/licenses/tenant/{tenantId}` | Get licenses by tenant |
+| `PUT` | `/api/v1/licenses/{licenseId}` | Update license |
+| `DELETE` | `/api/v1/licenses/{licenseId}` | Disable license (removes Redis quota) |
+| `GET` | `/api/v1/licenses/expiring-soon?days=7` | Licenses expiring within N days |
+
+#### Alert APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/alerts` | List alerts (filter: `tenantId`, `status`, `alertType`) |
+| `GET` | `/api/v1/alerts/{alertId}` | Get alert by ID |
+| `PUT` | `/api/v1/alerts/{alertId}/resolve` | Resolve alert |
+| `PUT` | `/api/v1/alerts/{alertId}/ignore` | Ignore alert |
+
+#### Usage APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/usage/{tenantId}/current` | Current EPS, quota, usage %, daily totals |
+| `GET` | `/api/v1/usage/{tenantId}/history?hours=24` | Time-series data (1 data point/minute) |
+| `GET` | `/api/v1/usage/summary` | All tenants summary (admin dashboard) |
+
+#### Report APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/reports/usage/csv?tenantId=X&month=2026-06` | Download monthly CSV report |
+
+#### Other APIs
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/audit-logs` | List all audit logs |
+| `GET` | `/api/v1/health` | Health check |
+
+### Collector API (`:8081`)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/collector/events/batch` | Submit event batch for processing |
+| `GET` | `/api/v1/health` | Health check |
+
+### Swagger UI
+
+- Management API: http://localhost:8080/swagger-ui.html
+- Collector Service: http://localhost:8081/swagger-ui.html
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Docker & Docker Compose
+
+### Run
 
 ```bash
+# Start all services
 docker compose up --build
-```
 
-To stop:
-
-```bash
+# Stop
 docker compose down
-```
 
-To stop and remove volumes:
-
-```bash
+# Stop and remove volumes (clean reset)
 docker compose down -v
 ```
 
-## 7. Health Checks
+### Service URLs
 
-Management API:
+| Service | URL |
+|---|---|
+| Frontend Dashboard | http://localhost:3000 |
+| Management API | http://localhost:8080 |
+| Collector API | http://localhost:8081 |
+| Management Swagger | http://localhost:8080/swagger-ui.html |
+| Collector Swagger | http://localhost:8081/swagger-ui.html |
 
-```bash
-curl http://localhost:8080/api/v1/health
-```
+### Environment Variables
 
-Collector Service:
+#### Event Producer
 
-```bash
-curl http://localhost:8081/api/v1/health
-```
+| Variable | Default | Description |
+|---|---|---|
+| `TENANT_IDS` | `tenant-a` | Comma-separated tenant IDs |
+| `EPS` | `100` | Target events per second |
+| `BATCH_SIZE` | `50` | Events per batch |
+| `COLLECTOR_URL` | `http://localhost:8081` | Collector service URL |
 
-Expected response example:
+---
 
-```json
-{
-  "service": "collector-service",
-  "status": "ok",
-  "redis": "PONG",
-  "timestamp": "2026-06-17T10:00:00Z"
-}
-```
+## Testing
 
-## 8. Swagger UI
-
-Management API Swagger:
-
-```text
-http://localhost:8080/swagger-ui.html
-```
-
-Collector Service Swagger:
-
-```text
-http://localhost:8081/swagger-ui.html
-```
-
-## 9. Management API Endpoints
-
-Tenant APIs:
-
-```text
-POST   /api/v1/tenants
-GET    /api/v1/tenants
-GET    /api/v1/tenants/{tenantId}
-PUT    /api/v1/tenants/{tenantId}
-DELETE /api/v1/tenants/{tenantId}
-```
-
-`DELETE /api/v1/tenants/{tenantId}` disables the tenant instead of hard deleting it.
-
-License APIs:
-
-```text
-POST   /api/v1/licenses
-GET    /api/v1/licenses
-GET    /api/v1/licenses/{licenseId}
-GET    /api/v1/licenses/tenant/{tenantId}
-PUT    /api/v1/licenses/{licenseId}
-DELETE /api/v1/licenses/{licenseId}
-GET    /api/v1/licenses/expiring-soon?days=7
-```
-
-`DELETE /api/v1/licenses/{licenseId}` disables the license instead of hard deleting it.
-
-Audit log API:
-
-```text
-GET /api/v1/audit-logs
-```
-
-## 10. Frontend
-
-Frontend URL:
-
-```text
-http://localhost:3000
-```
-
-## 11. Docker Compose Services
-
-```text
-postgres
-redis
-management-api-service
-collector-service
-frontend
-event-producer
-```
-
-## 12. Current Phase Status
-
-Phase 2 focuses on the Control Plane foundation.
-
-Completed:
-
-- Created management-api-service
-- Created collector-service
-- Created frontend
-- Created event-producer
-- Added Dockerfile for backend services
-- Added Dockerfile for frontend
-- Added Dockerfile for event-producer
-- Added docker-compose.yml
-- Verified Docker Compose startup
-- Verified health endpoints
-- Verified Swagger UI
-- Verified frontend page
-- Verified event-producer heartbeat
-- Added PostgreSQL schema for tenants, licenses, audit logs and alerts
-- Added Tenant CRUD APIs with disable flow
-- Added AuditLog module and `GET /api/v1/audit-logs`
-- Added audit logging for tenant create/update/disable
-- Added License CRUD APIs with disable flow
-- Added license expiring-soon API
-- Added license business validation
-- Added audit logging for license create/update/disable
-- Added Redis quota sync with key format `quota:{tenant_id}`
-- Added Alert entity and repository mapping for the existing `alerts` table
-
-Not implemented yet:
-
-- Collector batch event API
-- Token bucket
-- EPS Redis counters
-- Full alert logic for 70%, 100%, resolve and ignore
-- Usage APIs
-- CSV report
-- Real dashboard
-
-## 13. Next Phase
-
-Next work will continue from the remaining MVP scope:
-
-- Collector batch event API
-- Redis quota read path in collector-service
-- Token bucket EPS enforcement
-- EPS usage counters
-- Alert generation and alert management APIs
-- Usage APIs
-- CSV reporting
-- Dashboard implementation
-
-## 14. Manual Test With Swagger
-
-Open the Management API Swagger UI:
-
-```text
-http://localhost:8080/swagger-ui.html
-```
-
-### 1. Create tenant
-
-```text
-POST /api/v1/tenants
-```
-
-Request body:
-
-```json
-{
-  "name": "Tenant A"
-}
-```
-
-Expected result:
-
-- Tenant is saved in PostgreSQL
-- Audit log `CREATE_TENANT` is created
-
-Copy the returned `tenantId` for the next step.
-
-### 2. Create license
-
-```text
-POST /api/v1/licenses
-```
-
-Request body:
-
-```json
-{
-  "tenantId": "uuid-cua-tenant",
-  "epsQuota": 100,
-  "startDate": "2026-06-01",
-  "endDate": "2026-12-31"
-}
-```
-
-Expected result:
-
-- License is saved in PostgreSQL
-- Audit log `CREATE_LICENSE` is created
-- Redis contains `quota:{tenant_id} = 100`
-
-Copy the returned `licenseId` for update and disable tests.
-
-### 3. Check Redis quota
-
-Open Redis CLI:
+### Unit Tests
 
 ```bash
-docker exec -it soc-redis redis-cli
+# Management API Service (33 tests)
+cd apps/management-api-service
+./mvnw test
+
+# Collector Service (14 tests)
+cd apps/collector-service
+./mvnw test
 ```
 
-Run:
+### Test Coverage
 
-```text
-GET quota:{tenant_id}
+| Service | Test Classes | Tests | Status |
+|---|---|---:|---|
+| management-api-service | LicenseServiceTest, AlertServiceTest, UsageApiServiceTest, ReportServiceTest | 33 | ✅ All passing |
+| collector-service | CollectorServiceImplTest, UsageCounterServiceTest | 14 | ✅ All passing |
+| **Total** | **6 classes** | **47** | **✅** |
+
+---
+
+## Manual Testing Guide
+
+### 1. Create Tenant
+
+```bash
+curl -X POST http://localhost:8080/api/v1/tenants \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Tenant A"}'
 ```
 
-Expected result:
+Copy the returned `tenantId`.
 
-```text
-"100"
+### 2. Create License
+
+```bash
+curl -X POST http://localhost:8080/api/v1/licenses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenantId": "<tenant-id>",
+    "epsQuota": 100,
+    "startDate": "2026-06-01",
+    "endDate": "2026-12-31"
+  }'
 ```
 
-### 4. Update license
+Verify Redis quota:
 
-```text
-PUT /api/v1/licenses/{licenseId}
+```bash
+docker exec -it soc-redis redis-cli GET "quota:<tenant-id>"
+# Expected: "100"
 ```
 
-Request body:
+### 3. Send Events
 
-```json
-{
-  "epsQuota": 200,
-  "startDate": "2026-06-01",
-  "endDate": "2026-12-31",
-  "status": "ACTIVE"
-}
+```bash
+curl -X POST http://localhost:8081/api/v1/collector/events/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenantId": "<tenant-id>",
+    "events": [
+      {
+        "eventId": "evt-001",
+        "tenantId": "<tenant-id>",
+        "eventType": "firewall.connection",
+        "timestamp": "2026-06-23T10:00:00Z",
+        "payload": {"sourceIp": "10.0.0.1", "port": 443},
+        "metadata": {"agent": "agent-1"}
+      }
+    ]
+  }'
 ```
 
-Expected result:
+### 4. Check Usage
 
-- License is updated in PostgreSQL
-- Audit log `UPDATE_LICENSE` is created
-- Redis contains `quota:{tenant_id} = 200`
-
-Redis check:
-
-```text
-GET quota:{tenant_id}
+```bash
+curl http://localhost:8080/api/v1/usage/<tenant-id>/current
 ```
 
-Expected result:
+### 5. Check Alerts
 
-```text
-"200"
+```bash
+curl http://localhost:8080/api/v1/alerts?status=OPEN
 ```
 
-### 5. Disable license
+### 6. Export CSV Report
 
-```text
-DELETE /api/v1/licenses/{licenseId}
+```bash
+curl -O http://localhost:8080/api/v1/reports/usage/csv?tenantId=<tenant-id>&month=2026-06
 ```
 
-Expected result:
+### 7. View Audit Logs
 
-- License status becomes `DISABLED`
-- Audit log `DISABLE_LICENSE` is created
-- Redis key `quota:{tenant_id}` is deleted
-
-Redis check:
-
-```text
-GET quota:{tenant_id}
+```bash
+curl http://localhost:8080/api/v1/audit-logs
 ```
 
-Expected result:
+---
 
-```text
-(nil)
+## Project Structure
+
 ```
-
-### 6. View audit logs
-
-```text
-GET /api/v1/audit-logs
+soc-license-platform/
+├── apps/
+│   ├── management-api-service/    # Control Plane (Spring Boot)
+│   │   └── src/main/java/com/vcs/management/
+│   │       ├── tenant/            # Tenant CRUD
+│   │       ├── license/           # License CRUD + Scheduler
+│   │       ├── alert/             # Alert Service + Scheduler + Controller
+│   │       ├── usage/             # Usage API (reads Redis counters)
+│   │       ├── report/            # CSV Report generation
+│   │       ├── audit/             # Audit logging
+│   │       └── common/            # Enums, exceptions, Redis sync
+│   │
+│   ├── collector-service/         # Data Plane (Spring Boot)
+│   │   └── src/main/java/com/vcs/collector/
+│   │       ├── collector/         # Batch event processing
+│   │       ├── quota/             # QuotaService + TokenBucketService
+│   │       ├── usagecounter/      # Redis EPS counters
+│   │       └── common/            # Enums, response wrapper
+│   │
+│   ├── frontend/                  # React Dashboard (Vite + TypeScript)
+│   │   └── src/
+│   │       ├── api/               # Axios API modules
+│   │       ├── pages/admin/       # Admin Dashboard, Tenants, Licenses, Audit
+│   │       └── pages/tenant/      # Tenant Dashboard (EPS chart, alerts)
+│   │
+│   └── event-producer/            # Mock Agent (Node.js + TypeScript)
+│
+├── docker-compose.yml
+└── README.md
 ```
-
-Expected result includes:
-
-- `CREATE_TENANT`
-- `CREATE_LICENSE`
-- `UPDATE_LICENSE`
-- `DISABLE_LICENSE`
-
-### 7. Check expiring-soon licenses
-
-```text
-GET /api/v1/licenses/expiring-soon?days=7
-```
-
-Expected result:
-
-- Returns `ACTIVE` licenses whose `endDate` is between today and today plus 7 days
-
-Note: the sample license above has `endDate = 2026-12-31` and is disabled in step 5, so it should not appear in this result. To test a positive result, create or update an `ACTIVE` license with `endDate` inside the requested date window.
