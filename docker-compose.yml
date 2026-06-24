@@ -74,12 +74,12 @@ services:
   frontend:
     build:
       context: ./apps/frontend
+      args:
+        VITE_MANAGEMENT_API_URL: ""
+        VITE_COLLECTOR_API_URL: ""
     container_name: frontend
     ports:
       - "3000:3000"
-    environment:
-      VITE_MANAGEMENT_API_URL: http://localhost:8080
-      VITE_COLLECTOR_API_URL: http://localhost:8081
     depends_on:
       - management-api-service
       - collector-service
@@ -90,7 +90,7 @@ services:
     container_name: event-producer
     environment:
       COLLECTOR_URL: http://collector-service:8081
-      TENANT_IDS: tenant-a
+      TENANT_IDS: d3fc8485-7d94-4324-9e2a-dc371d127d93
       EPS: 100
       BATCH_SIZE: 50
     depends_on:

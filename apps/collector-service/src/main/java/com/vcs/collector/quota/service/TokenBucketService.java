@@ -51,7 +51,7 @@ public class TokenBucketService {
             TokenBucketStateDTO newState = new TokenBucketStateDTO(
                     tenantId,
                     state.availableTokens() - accepted,
-                    System.currentTimeMillis(),
+                    state.lastRefillEpochMs(),
                     state.quotaEps()
             );
             saveBucketState(newState);
@@ -92,16 +92,24 @@ public class TokenBucketService {
         long currentTokens = Long.parseLong(tokensStr);
         long lastRefillEpoch = Long.parseLong(lastRefillStr);
 
-        // Calculate refill
+        // Calculate refill using millisecond precision to avoid losing tokens
         long nowEpoch = System.currentTimeMillis();
         long elapsedMs = nowEpoch - lastRefillEpoch;
-        long elapsedSeconds = elapsedMs / 1000;
 
-        // Refill tokens: quota_eps tokens per second
-        long refillTokens = elapsedSeconds * quota.quotaEps();
+        long refillTokens = (elapsedMs * quota.quotaEps()) / 1000;
         long newTokens = Math.min(currentTokens + refillTokens, quota.quotaEps());
 
-        return new TokenBucketStateDTO(tenantId, newTokens, nowEpoch, quota.quotaEps());
+        // Only advance the epoch by the exact amount of time that produced the tokens
+        long newRefillEpoch = lastRefillEpoch;
+        if (refillTokens > 0) {
+            newRefillEpoch = lastRefillEpoch + (refillTokens * 1000 / quota.quotaEps());
+        }
+        // If bucket is full, we can just fast-forward to now
+        if (newTokens == quota.quotaEps()) {
+            newRefillEpoch = nowEpoch;
+        }
+
+        return new TokenBucketStateDTO(tenantId, newTokens, newRefillEpoch, quota.quotaEps());
     }
 
     /**

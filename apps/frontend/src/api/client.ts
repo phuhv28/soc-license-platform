@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const MANAGEMENT_API_URL = import.meta.env.VITE_MANAGEMENT_API_URL || 'http://localhost:8080';
+const MANAGEMENT_API_URL = import.meta.env.VITE_MANAGEMENT_API_URL || '';
 
 const client = axios.create({
   baseURL: MANAGEMENT_API_URL,
