@@ -90,7 +90,7 @@ services:
     container_name: event-producer
     environment:
       COLLECTOR_URL: http://collector-service:8081
-      TENANT_IDS: d3fc8485-7d94-4324-9e2a-dc371d127d93
+      TENANT_IDS: ca51ed3d-62ab-44b9-87b2-b583636c6c58
       EPS: 100
       BATCH_SIZE: 50
     depends_on:

@@ -33,7 +33,11 @@ public class LicenseExpirationScheduler {
         this.alertService = alertService;
     }
 
-    @Scheduled(cron = "0 0 8 * * *")
+    /**
+     * Runs every 5 minutes for testing purposes.
+     * (Originally: 0 0 8 * * * - every day at 08:00)
+     */
+    @Scheduled(cron = "0 */5 * * * *")
     public void checkExpiringLicenses() {
         log.info("Running license expiration check...");
 
@@ -52,6 +56,12 @@ public class LicenseExpirationScheduler {
                         license.getLicenseId(),
                         daysRemaining
                 );
+                
+                // Add delay to prevent Mailtrap rate limits (Too many emails per second)
+                Thread.sleep(3000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("Scheduler interrupted during delay");
             } catch (Exception e) {
                 log.error("Error creating expiration alert for license {}: {}",
                         license.getLicenseId(), e.getMessage(), e);
