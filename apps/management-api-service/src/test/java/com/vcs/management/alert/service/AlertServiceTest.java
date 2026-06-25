@@ -8,7 +8,6 @@ import com.vcs.management.alert.repository.AlertRepository;
 import com.vcs.management.audit.service.AuditLogService;
 import com.vcs.management.common.enums.*;
 import com.vcs.management.common.exception.ResourceNotFoundException;
-import com.vcs.management.license.entity.License;
 import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
@@ -21,7 +20,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

@@ -12,7 +12,6 @@ import com.vcs.management.common.exception.ResourceNotFoundException;
 import com.vcs.management.common.redis.RedisQuotaSyncService;
 import com.vcs.management.license.dto.CreateLicenseRequest;
 import com.vcs.management.license.dto.LicenseResponse;
-import com.vcs.management.license.dto.UpdateLicenseRequest;
 import com.vcs.management.license.entity.License;
 import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;
