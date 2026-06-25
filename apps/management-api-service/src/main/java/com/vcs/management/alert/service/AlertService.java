@@ -38,19 +38,22 @@ public class AlertService {
     private final LicenseRepository licenseRepository;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final NotificationService notificationService;
 
     public AlertService(
             AlertRepository alertRepository,
             TenantRepository tenantRepository,
             LicenseRepository licenseRepository,
             AuditLogService auditLogService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            NotificationService notificationService
     ) {
         this.alertRepository = alertRepository;
         this.tenantRepository = tenantRepository;
         this.licenseRepository = licenseRepository;
         this.auditLogService = auditLogService;
         this.objectMapper = objectMapper;
+        this.notificationService = notificationService;
     }
 
     // ── Query ───────────────────────────────────────────────────────────
@@ -192,6 +195,9 @@ public class AlertService {
 
         log.info("Created LICENSE_EXPIRING_SOON alert for tenant {}, {} days remaining",
                 tenantId, daysRemaining);
+                
+        // Trigger auto notification
+        notificationService.notifyLicenseExpiring(tenant, daysRemaining);
     }
 
     // ── Private Helpers ─────────────────────────────────────────────────

@@ -35,6 +35,7 @@ class AlertServiceTest {
     @Mock private TenantRepository tenantRepository;
     @Mock private LicenseRepository licenseRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private NotificationService notificationService;
 
     private AlertService alertService;
     private Tenant tenant;
@@ -44,7 +45,7 @@ class AlertServiceTest {
     void setUp() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
-        alertService = new AlertService(alertRepository, tenantRepository, licenseRepository, auditLogService, mapper);
+        alertService = new AlertService(alertRepository, tenantRepository, licenseRepository, auditLogService, mapper, notificationService);
 
         tenant = new Tenant("Test Tenant");
         try {

@@ -9,6 +9,8 @@ import java.util.UUID;
 public record TenantResponse(
         UUID tenantId,
         String name,
+        String notificationEmail,
+        String webhookUrl,
         TenantStatus status,
         Instant createdAt,
         Instant updatedAt
@@ -18,6 +20,8 @@ public record TenantResponse(
         return new TenantResponse(
                 tenant.getTenantId(),
                 tenant.getName(),
+                tenant.getNotificationEmail(),
+                tenant.getWebhookUrl(),
                 tenant.getStatus(),
                 tenant.getCreatedAt(),
                 tenant.getUpdatedAt()

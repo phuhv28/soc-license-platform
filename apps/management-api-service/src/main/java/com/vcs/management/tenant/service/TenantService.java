@@ -40,6 +40,8 @@ public class TenantService {
     @Transactional
     public TenantResponse createTenant(CreateTenantRequest request) {
         Tenant tenant = new Tenant(normalizeName(request.name()));
+        tenant.setNotificationEmail(request.notificationEmail());
+        tenant.setWebhookUrl(request.webhookUrl());
         Tenant savedTenant = tenantRepository.saveAndFlush(tenant);
         TenantResponse response = TenantResponse.from(savedTenant);
 
@@ -74,6 +76,8 @@ public class TenantService {
         String beforeValue = toJson(TenantResponse.from(tenant));
 
         tenant.setName(normalizeName(request.name()));
+        tenant.setNotificationEmail(request.notificationEmail());
+        tenant.setWebhookUrl(request.webhookUrl());
         Tenant updatedTenant = tenantRepository.saveAndFlush(tenant);
         TenantResponse response = TenantResponse.from(updatedTenant);
 

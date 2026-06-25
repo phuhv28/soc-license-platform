@@ -27,6 +27,12 @@ public class Tenant {
     @Column(name = "name", nullable = false, length = 255)
     private String name;
 
+    @Column(name = "notification_email", length = 255)
+    private String notificationEmail;
+
+    @Column(name = "webhook_url", length = 1024)
+    private String webhookUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 50)
     private TenantStatus status = TenantStatus.ACTIVE;
@@ -57,6 +63,22 @@ public class Tenant {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public String getNotificationEmail() {
+        return notificationEmail;
+    }
+
+    public void setNotificationEmail(String notificationEmail) {
+        this.notificationEmail = notificationEmail;
+    }
+
+    public String getWebhookUrl() {
+        return webhookUrl;
+    }
+
+    public void setWebhookUrl(String webhookUrl) {
+        this.webhookUrl = webhookUrl;
     }
 
     public TenantStatus getStatus() {

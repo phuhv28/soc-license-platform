@@ -101,20 +101,29 @@ public class UsageApiService {
         }
     }
 
-    /**
-     * Calculate usage percentage: (currentEps / quota) × 100.
-     *
-     * @param tenantId the tenant UUID
-     * @return usage percent (0-N, can exceed 100)
-     */
     public int getUsagePercent(UUID tenantId) {
         long quota = getQuota(tenantId);
         if (quota <= 0) {
             return 0;
         }
 
-        long currentEps = getCurrentEps(tenantId);
-        return (int) ((currentEps * 100) / quota);
+        long currentReceivedEps = getCurrentReceivedEps(tenantId);
+        return (int) ((currentReceivedEps * 100) / quota);
+    }
+
+    /**
+     * Get the current received EPS by reading the most recent 1-minute counter.
+     */
+    public long getCurrentReceivedEps(UUID tenantId) {
+        long now = System.currentTimeMillis() / 1000;
+        String currentWindow = getMinuteWindow(now);
+        long received = getCounterValue(tenantId.toString(), "received", "1m", currentWindow);
+
+        if (received == 0) {
+            String prevWindow = getMinuteWindow(now - 60);
+            received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
+        }
+        return received / 60;
     }
 
     // ── Daily Totals ────────────────────────────────────────────────────

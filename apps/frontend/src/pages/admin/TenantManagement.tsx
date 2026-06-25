@@ -8,6 +8,8 @@ export default function TenantManagement() {
   const [showModal, setShowModal] = useState(false);
   const [editTenant, setEditTenant] = useState<Tenant | null>(null);
   const [name, setName] = useState('');
+  const [notificationEmail, setNotificationEmail] = useState('');
+  const [webhookUrl, setWebhookUrl] = useState('');
 
   const fetchTenants = async () => {
     try {
@@ -22,16 +24,29 @@ export default function TenantManagement() {
 
   useEffect(() => { fetchTenants(); }, []);
 
-  const openCreate = () => { setEditTenant(null); setName(''); setShowModal(true); };
-  const openEdit = (t: Tenant) => { setEditTenant(t); setName(t.name); setShowModal(true); };
+  const openCreate = () => { 
+    setEditTenant(null); 
+    setName(''); 
+    setNotificationEmail('');
+    setWebhookUrl('');
+    setShowModal(true); 
+  };
+  
+  const openEdit = (t: Tenant) => { 
+    setEditTenant(t); 
+    setName(t.name); 
+    setNotificationEmail(t.notificationEmail || '');
+    setWebhookUrl(t.webhookUrl || '');
+    setShowModal(true); 
+  };
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
     try {
       if (editTenant) {
-        await tenantsApi.update(editTenant.tenantId, name);
+        await tenantsApi.update(editTenant.tenantId, name, notificationEmail, webhookUrl);
       } else {
-        await tenantsApi.create(name);
+        await tenantsApi.create(name, notificationEmail, webhookUrl);
       }
       setShowModal(false);
       fetchTenants();
@@ -117,6 +132,14 @@ export default function TenantManagement() {
               <div className="form-group">
                 <label className="form-label">Tenant Name</label>
                 <input className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder="Enter tenant name" autoFocus />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Notification Email</label>
+                <input className="form-input" type="email" value={notificationEmail} onChange={e => setNotificationEmail(e.target.value)} placeholder="admin@tenant.com (optional)" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Webhook URL (Slack/Telegram)</label>
+                <input className="form-input" type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://... (optional)" />
               </div>
             </div>
             <div className="modal-footer">
