@@ -20,6 +20,8 @@ public class UsageCounterService {
 
     // TTL constants
     private static final long COUNTER_1M_TTL_SECONDS = 48 * 60 * 60; // 48 hours
+    private static final long COUNTER_5M_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+    private static final long COUNTER_15M_TTL_SECONDS = 14 * 24 * 60 * 60; // 14 days
     private static final long COUNTER_1D_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
 
     // Timestamp formatters
@@ -46,13 +48,21 @@ public class UsageCounterService {
             long nowUnixSeconds = nowMs / 1000;
             
             String minuteWindow = getMinuteWindow(nowUnixSeconds);
+            String minute5Window = getFloorMinuteWindow(nowUnixSeconds, 5);
+            String minute15Window = getFloorMinuteWindow(nowUnixSeconds, 15);
             String dayWindow = getDayWindow(nowUnixSeconds);
 
             // Update 1-minute counters
-            incrementMinuteCounters(tenantId, minuteWindow, received, accepted, dropped);
+            incrementWindowCounters(tenantId, "1m", minuteWindow, received, accepted, dropped, COUNTER_1M_TTL_SECONDS);
+
+            // Update 5-minute counters
+            incrementWindowCounters(tenantId, "5m", minute5Window, received, accepted, dropped, COUNTER_5M_TTL_SECONDS);
+
+            // Update 15-minute counters
+            incrementWindowCounters(tenantId, "15m", minute15Window, received, accepted, dropped, COUNTER_15M_TTL_SECONDS);
 
             // Update 1-day counters
-            incrementDayCounters(tenantId, dayWindow, received, accepted, dropped);
+            incrementWindowCounters(tenantId, "1d", dayWindow, received, accepted, dropped, COUNTER_1D_TTL_SECONDS);
 
         } catch (Exception e) {
             // Non-blocking: silently skip on Redis error
@@ -61,52 +71,78 @@ public class UsageCounterService {
     }
 
     /**
-     * Increment 1-minute window counters with 48-hour TTL
+     * Increment dimensions (agent, log source) for Top-N metrics using sorted sets
      */
-    private void incrementMinuteCounters(String tenantId, String minuteWindow,
-                                        long received, long accepted, long dropped) {
-        String receivedKey = String.format("usage:%s:received:1m:%s", tenantId, minuteWindow);
-        String acceptedKey = String.format("usage:%s:accepted:1m:%s", tenantId, minuteWindow);
-        String droppedKey = String.format("usage:%s:dropped:1m:%s", tenantId, minuteWindow);
-
-        if (received > 0) {
-            redisTemplate.opsForValue().increment(receivedKey, received);
-            redisTemplate.expire(receivedKey, Duration.ofSeconds(COUNTER_1M_TTL_SECONDS));
+    public void incrementDimensions(String tenantId, java.util.Map<String, Long> agentCounts, java.util.Map<String, Long> logSourceCounts) {
+        if (agentCounts.isEmpty() && logSourceCounts.isEmpty()) {
+            return;
         }
 
-        if (accepted > 0) {
-            redisTemplate.opsForValue().increment(acceptedKey, accepted);
-            redisTemplate.expire(acceptedKey, Duration.ofSeconds(COUNTER_1M_TTL_SECONDS));
-        }
+        try {
+            long nowUnixSeconds = System.currentTimeMillis() / 1000;
+            String window1m = getMinuteWindow(nowUnixSeconds);
+            String window5m = getFloorMinuteWindow(nowUnixSeconds, 5);
+            String window15m = getFloorMinuteWindow(nowUnixSeconds, 15);
 
-        if (dropped > 0) {
-            redisTemplate.opsForValue().increment(droppedKey, dropped);
-            redisTemplate.expire(droppedKey, Duration.ofSeconds(COUNTER_1M_TTL_SECONDS));
+            redisTemplate.executePipelined((org.springframework.data.redis.connection.RedisConnection connection) -> {
+                org.springframework.data.redis.serializer.RedisSerializer<String> serializer = 
+                        (org.springframework.data.redis.serializer.RedisSerializer<String>) redisTemplate.getKeySerializer();
+
+                java.util.function.BiConsumer<String, java.util.Map<String, Long>> addZsets = (dimension, counts) -> {
+                    counts.forEach((item, count) -> {
+                        if (count <= 0) return;
+                        
+                        byte[] itemBytes = serializer.serialize(item);
+                        
+                        // 1m
+                        byte[] key1m = serializer.serialize(String.format("top:%s:%s:1m:%s", tenantId, dimension, window1m));
+                        connection.zSetCommands().zIncrBy(key1m, count, itemBytes);
+                        connection.keyCommands().expire(key1m, COUNTER_1M_TTL_SECONDS);
+
+                        // 5m
+                        byte[] key5m = serializer.serialize(String.format("top:%s:%s:5m:%s", tenantId, dimension, window5m));
+                        connection.zSetCommands().zIncrBy(key5m, count, itemBytes);
+                        connection.keyCommands().expire(key5m, COUNTER_5M_TTL_SECONDS);
+
+                        // 15m
+                        byte[] key15m = serializer.serialize(String.format("top:%s:%s:15m:%s", tenantId, dimension, window15m));
+                        connection.zSetCommands().zIncrBy(key15m, count, itemBytes);
+                        connection.keyCommands().expire(key15m, COUNTER_15M_TTL_SECONDS);
+                    });
+                };
+
+                addZsets.accept("agent", agentCounts);
+                addZsets.accept("logsource", logSourceCounts);
+
+                return null;
+            });
+        } catch (Exception e) {
+            // Non-blocking
         }
     }
 
     /**
-     * Increment 1-day window counters with 90-day TTL
+     * Generic window counter incrementer
      */
-    private void incrementDayCounters(String tenantId, String dayWindow,
-                                     long received, long accepted, long dropped) {
-        String receivedKey = String.format("usage:%s:received:1d:%s", tenantId, dayWindow);
-        String acceptedKey = String.format("usage:%s:accepted:1d:%s", tenantId, dayWindow);
-        String droppedKey = String.format("usage:%s:dropped:1d:%s", tenantId, dayWindow);
+    private void incrementWindowCounters(String tenantId, String window, String windowKey,
+                                         long received, long accepted, long dropped, long ttlSeconds) {
+        String receivedKey = String.format("usage:%s:received:%s:%s", tenantId, window, windowKey);
+        String acceptedKey = String.format("usage:%s:accepted:%s:%s", tenantId, window, windowKey);
+        String droppedKey = String.format("usage:%s:dropped:%s:%s", tenantId, window, windowKey);
 
         if (received > 0) {
             redisTemplate.opsForValue().increment(receivedKey, received);
-            redisTemplate.expire(receivedKey, Duration.ofSeconds(COUNTER_1D_TTL_SECONDS));
+            redisTemplate.expire(receivedKey, Duration.ofSeconds(ttlSeconds));
         }
 
         if (accepted > 0) {
             redisTemplate.opsForValue().increment(acceptedKey, accepted);
-            redisTemplate.expire(acceptedKey, Duration.ofSeconds(COUNTER_1D_TTL_SECONDS));
+            redisTemplate.expire(acceptedKey, Duration.ofSeconds(ttlSeconds));
         }
 
         if (dropped > 0) {
             redisTemplate.opsForValue().increment(droppedKey, dropped);
-            redisTemplate.expire(droppedKey, Duration.ofSeconds(COUNTER_1D_TTL_SECONDS));
+            redisTemplate.expire(droppedKey, Duration.ofSeconds(ttlSeconds));
         }
     }
 
@@ -117,6 +153,19 @@ public class UsageCounterService {
     private String getMinuteWindow(long unixSeconds) {
         return java.time.Instant.ofEpochSecond(unixSeconds)
                 .atZone(ZoneId.systemDefault())
+                .format(MINUTE_FORMATTER);
+    }
+
+    /**
+     * Get floored minute window identifier for 5m, 15m etc.
+     * Format: yyyyMMddHHmm
+     */
+    private String getFloorMinuteWindow(long unixSeconds, int minuteInterval) {
+        java.time.ZonedDateTime zdt = java.time.Instant.ofEpochSecond(unixSeconds)
+                .atZone(ZoneId.systemDefault());
+        int minute = zdt.getMinute();
+        int flooredMinute = (minute / minuteInterval) * minuteInterval;
+        return zdt.withMinute(flooredMinute).withSecond(0).withNano(0)
                 .format(MINUTE_FORMATTER);
     }
 

@@ -217,6 +217,50 @@ public class UsageApiService {
         }
     }
 
+    // ── Top-N Dimensions ────────────────────────────────────────────────
+
+    /**
+     * Get Top N elements for a specific dimension and time window.
+     */
+    public List<com.vcs.management.usage.dto.UsageDimensionResponse> getTopNDimensions(UUID tenantId, String dimension, String window, int limit) {
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        String timeKey;
+        int windowSeconds;
+
+        if ("5m".equals(window)) {
+            timeKey = getFloorMinuteWindow(nowSeconds, 5);
+            windowSeconds = 300;
+        } else if ("15m".equals(window)) {
+            timeKey = getFloorMinuteWindow(nowSeconds, 15);
+            windowSeconds = 900;
+        } else {
+            // default to 1m
+            timeKey = getMinuteWindow(nowSeconds);
+            windowSeconds = 60;
+        }
+
+        String key = String.format("top:%s:%s:%s:%s", tenantId, dimension, window, timeKey);
+
+        java.util.Set<org.springframework.data.redis.core.ZSetOperations.TypedTuple<String>> tuples = 
+                redisTemplate.opsForZSet().reverseRangeWithScores(key, 0, limit - 1);
+
+        if (tuples == null || tuples.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+
+        List<com.vcs.management.usage.dto.UsageDimensionResponse> results = new ArrayList<>();
+        for (org.springframework.data.redis.core.ZSetOperations.TypedTuple<String> tuple : tuples) {
+            String name = tuple.getValue();
+            long count = tuple.getScore() != null ? tuple.getScore().longValue() : 0;
+            double eps = (double) count / windowSeconds;
+            // Round to 2 decimal places
+            eps = Math.round(eps * 100.0) / 100.0;
+            results.add(new com.vcs.management.usage.dto.UsageDimensionResponse(name, count, eps));
+        }
+
+        return results;
+    }
+
     // ── Time Window Helpers ─────────────────────────────────────────────
 
     private String getMinuteWindow(long unixSeconds) {
@@ -229,6 +273,15 @@ public class UsageApiService {
         return Instant.ofEpochSecond(unixSeconds)
                 .atZone(ZoneId.systemDefault())
                 .format(DISPLAY_MINUTE_FORMATTER);
+    }
+
+    private String getFloorMinuteWindow(long unixSeconds, int minuteInterval) {
+        java.time.ZonedDateTime zdt = Instant.ofEpochSecond(unixSeconds)
+                .atZone(ZoneId.systemDefault());
+        int minute = zdt.getMinute();
+        int flooredMinute = (minute / minuteInterval) * minuteInterval;
+        return zdt.withMinute(flooredMinute).withSecond(0).withNano(0)
+                .format(MINUTE_FORMATTER);
     }
 
     public String getDayWindow(long unixSeconds) {

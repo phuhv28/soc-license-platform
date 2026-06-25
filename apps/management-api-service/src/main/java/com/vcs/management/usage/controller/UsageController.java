@@ -108,6 +108,25 @@ public class UsageController {
         return ApiResponse.success(response);
     }
 
+    /**
+     * Get Top-N dimensions (agent, logsource) by EPS.
+     */
+    @GetMapping("/{tenantId}/dimensions/top")
+    public ApiResponse<List<com.vcs.management.usage.dto.UsageDimensionResponse>> getTopDimensions(
+            @PathVariable UUID tenantId,
+            @RequestParam String dimension,
+            @RequestParam(defaultValue = "5m") String window,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        // Validate tenant exists
+        findTenant(tenantId);
+
+        List<com.vcs.management.usage.dto.UsageDimensionResponse> topDimensions = 
+                usageApiService.getTopNDimensions(tenantId, dimension, window, limit);
+        
+        return ApiResponse.success(topDimensions);
+    }
+
     private Tenant findTenant(UUID tenantId) {
         return tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant not found"));

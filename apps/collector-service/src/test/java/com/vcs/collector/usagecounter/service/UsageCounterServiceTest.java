@@ -24,7 +24,7 @@ class UsageCounterServiceTest {
     @InjectMocks private UsageCounterService usageCounterService;
 
     @Test
-    @DisplayName("should increment all 6 counters (3 types × 2 windows)")
+    @DisplayName("should increment all 12 counters (3 types × 4 windows)")
     void shouldIncrementAllCounters() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.increment(anyString(), anyLong())).thenReturn(1L);
@@ -32,8 +32,8 @@ class UsageCounterServiceTest {
 
         usageCounterService.incrementCounters("tenant-a", 10, 8, 2);
 
-        // 3 types × 2 windows = 6 increment calls
-        verify(valueOps, times(6)).increment(anyString(), anyLong());
+        // 3 types × 4 windows = 12 increment calls
+        verify(valueOps, times(12)).increment(anyString(), anyLong());
     }
 
     @Test
@@ -53,8 +53,8 @@ class UsageCounterServiceTest {
 
         usageCounterService.incrementCounters("tenant-a", 10, 0, 0);
 
-        // Only received > 0: 1 type × 2 windows = 2 increment calls
-        verify(valueOps, times(2)).increment(anyString(), eq(10L));
+        // Only received > 0: 1 type × 4 windows = 4 increment calls
+        verify(valueOps, times(4)).increment(anyString(), eq(10L));
     }
 
     @Test

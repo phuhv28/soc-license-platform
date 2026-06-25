@@ -68,6 +68,8 @@ public class CollectorServiceImpl implements CollectorService {
         long accepted = 0;
         long dropped = 0;
         List<CollectorEventDTO> acceptedEvents = new ArrayList<>();
+        java.util.Map<String, Long> agentCounts = new java.util.HashMap<>();
+        java.util.Map<String, Long> logSourceCounts = new java.util.HashMap<>();
 
         for (int i = 0; i < events.size(); i++) {
             CollectorEventDTO event = events.get(i);
@@ -76,6 +78,18 @@ public class CollectorServiceImpl implements CollectorService {
             if (i < acceptableCount && validateEvent(event)) {
                 acceptedEvents.add(event);
                 accepted++;
+
+                // Aggregate dimensions
+                String agent = "unknown";
+                if (event.metadata() != null && event.metadata().containsKey("agent")) {
+                    agent = event.metadata().get("agent");
+                    if (agent == null || agent.isBlank()) agent = "unknown";
+                }
+                agentCounts.merge(agent, 1L, Long::sum);
+
+                String logSource = event.eventType() != null && !event.eventType().isBlank() ? event.eventType() : "unknown";
+                logSourceCounts.merge(logSource, 1L, Long::sum);
+
             } else {
                 dropped++;
             }
@@ -88,6 +102,7 @@ public class CollectorServiceImpl implements CollectorService {
 
         // Rule 4: Always update counters
         usageCounterService.incrementCounters(tenantId, received, accepted, dropped);
+        usageCounterService.incrementDimensions(tenantId, agentCounts, logSourceCounts);
 
         // Determine decision
         ProcessingDecision decision = determineDecision(received, accepted, dropped, acceptableCount);
