@@ -68,30 +68,37 @@ public class CollectorServiceImpl implements CollectorService {
         long accepted = 0;
         long dropped = 0;
         List<CollectorEventDTO> acceptedEvents = new ArrayList<>();
-        java.util.Map<String, Long> agentCounts = new java.util.HashMap<>();
-        java.util.Map<String, Long> logSourceCounts = new java.util.HashMap<>();
+        java.util.Map<String, UsageCounterService.DimensionCount> agentCounts = new java.util.HashMap<>();
+        java.util.Map<String, UsageCounterService.DimensionCount> logSourceCounts = new java.util.HashMap<>();
 
         for (int i = 0; i < events.size(); i++) {
             CollectorEventDTO event = events.get(i);
             
+            // Extract dimensions
+            String agent = "unknown";
+            if (event.metadata() != null && event.metadata().containsKey("agent")) {
+                agent = event.metadata().get("agent");
+                if (agent == null || agent.isBlank()) agent = "unknown";
+            }
+
+            String logSource = event.eventType() != null && !event.eventType().isBlank() ? event.eventType() : "unknown";
+
+            UsageCounterService.DimensionCount agCount = agentCounts.computeIfAbsent(agent, k -> new UsageCounterService.DimensionCount());
+            UsageCounterService.DimensionCount lsCount = logSourceCounts.computeIfAbsent(logSource, k -> new UsageCounterService.DimensionCount());
+            
+            agCount.addReceived(1);
+            lsCount.addReceived(1);
+
             // Accept if within token limit and passes validation
             if (i < acceptableCount && validateEvent(event)) {
                 acceptedEvents.add(event);
                 accepted++;
-
-                // Aggregate dimensions
-                String agent = "unknown";
-                if (event.metadata() != null && event.metadata().containsKey("agent")) {
-                    agent = event.metadata().get("agent");
-                    if (agent == null || agent.isBlank()) agent = "unknown";
-                }
-                agentCounts.merge(agent, 1L, Long::sum);
-
-                String logSource = event.eventType() != null && !event.eventType().isBlank() ? event.eventType() : "unknown";
-                logSourceCounts.merge(logSource, 1L, Long::sum);
-
+                agCount.addAccepted(1);
+                lsCount.addAccepted(1);
             } else {
                 dropped++;
+                agCount.addDropped(1);
+                lsCount.addDropped(1);
             }
         }
 

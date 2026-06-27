@@ -43,7 +43,7 @@ export default function TenantDashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [tenantId, historyWindow]);
 
@@ -245,57 +245,110 @@ export default function TenantDashboard() {
         </div>
 
         {/* Top Dimensions */}
-        <div className="grid-2" style={{ marginTop: 'var(--space-base)' }}>
-          <div className="card">
-            <div className="card-header"><h3>Top Agents ({historyWindow})</h3></div>
-            <div className="card-body" style={{ padding: 0 }}>
-              {topAgents.length > 0 ? (
-                <div className="data-table-wrapper">
-                  <table className="data-table">
-                    <thead>
-                      <tr><th>Agent</th><th>EPS</th><th>Count</th></tr>
-                    </thead>
-                    <tbody>
-                      {topAgents.map((agent, i) => (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 600 }}>{agent.name}</td>
-                          <td><span className="badge info">{agent.eps} EPS</span></td>
-                          <td style={{ color: 'var(--color-text-muted)' }}>{agent.count.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-state"><p>No agent data</p></div>
-              )}
-            </div>
+        {/* Top Dimensions */}
+        <div className="card" style={{ marginTop: 'var(--space-base)' }}>
+          <div className="card-header">
+            <h3 style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.5px' }}>INSTRUMENTED LOG SOURCES ({historyWindow})</h3>
           </div>
-          
-          <div className="card">
-            <div className="card-header"><h3>Top Log Sources ({historyWindow})</h3></div>
-            <div className="card-body" style={{ padding: 0 }}>
-              {topLogSources.length > 0 ? (
-                <div className="data-table-wrapper">
-                  <table className="data-table">
-                    <thead>
-                      <tr><th>Log Source</th><th>EPS</th><th>Count</th></tr>
-                    </thead>
-                    <tbody>
-                      {topLogSources.map((source, i) => (
+          <div className="card-body" style={{ padding: 0 }}>
+            {topLogSources.length > 0 ? (
+              <div className="data-table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '40px' }}>TYPE</th>
+                      <th>NAME</th>
+                      <th>RECEIVED EPS</th>
+                      <th>ACCEPTED EPS</th>
+                      <th style={{ width: '200px' }}>TRAFFIC BREAKDOWN</th>
+                      <th>INFRA.</th>
+                      <th>STATUS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topLogSources.map((source, i) => {
+                      const total = source.receivedEps || 1;
+                      const acceptedPct = (source.acceptedEps / total) * 100;
+                      const droppedPct = (source.droppedEps / total) * 100;
+                      const colors = ['#f4a261', '#e76f51', '#2a9d8f', '#e9c46a', '#264653', '#8ab17d'];
+                      const iconColor = colors[i % colors.length];
+
+                      return (
                         <tr key={i}>
+                          <td><div className="tenant-icon" style={{ backgroundColor: iconColor }} /></td>
                           <td style={{ fontWeight: 600 }}>{source.name}</td>
-                          <td><span className="badge info">{source.eps} EPS</span></td>
-                          <td style={{ color: 'var(--color-text-muted)' }}>{source.count.toLocaleString()}</td>
+                          <td>{source.receivedEps} /s</td>
+                          <td>{source.acceptedEps} /s</td>
+                          <td>
+                            <div className="progress-bar">
+                              <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
+                              <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />
+                            </div>
+                          </td>
+                          <td>{source.receivedCount.toLocaleString()} <span style={{ color: 'var(--color-text-muted)' }}>⬡</span></td>
+                          <td><span className="badge success">OK</span></td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-state"><p>No log source data</p></div>
-              )}
-            </div>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty-state"><p>No log source data</p></div>
+            )}
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 'var(--space-base)' }}>
+          <div className="card-header">
+            <h3 style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.5px' }}>INSTRUMENTED AGENTS ({historyWindow})</h3>
+          </div>
+          <div className="card-body" style={{ padding: 0 }}>
+            {topAgents.length > 0 ? (
+              <div className="data-table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '40px' }}>TYPE</th>
+                      <th>NAME</th>
+                      <th>RECEIVED EPS</th>
+                      <th>ACCEPTED EPS</th>
+                      <th style={{ width: '200px' }}>TRAFFIC BREAKDOWN</th>
+                      <th>INFRA.</th>
+                      <th>STATUS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topAgents.map((agent, i) => {
+                      const total = agent.receivedEps || 1;
+                      const acceptedPct = (agent.acceptedEps / total) * 100;
+                      const droppedPct = (agent.droppedEps / total) * 100;
+                      const colors = ['#2a9d8f', '#e9c46a', '#264653', '#f4a261', '#e76f51', '#8ab17d'];
+                      const iconColor = colors[i % colors.length];
+
+                      return (
+                        <tr key={i}>
+                          <td><div className="tenant-icon" style={{ backgroundColor: iconColor }} /></td>
+                          <td style={{ fontWeight: 600 }}>{agent.name}</td>
+                          <td>{agent.receivedEps} /s</td>
+                          <td>{agent.acceptedEps} /s</td>
+                          <td>
+                            <div className="progress-bar">
+                              <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
+                              <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />
+                            </div>
+                          </td>
+                          <td>{agent.receivedCount.toLocaleString()} <span style={{ color: 'var(--color-text-muted)' }}>⬡</span></td>
+                          <td><span className="badge success">OK</span></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="empty-state"><p>No agent data</p></div>
+            )}
           </div>
         </div>
       </div>

@@ -40,8 +40,12 @@ export interface UsageSummaryResponse {
 
 export interface UsageDimensionResponse {
   name: string;
-  count: number;
-  eps: number;
+  receivedCount: number;
+  acceptedCount: number;
+  droppedCount: number;
+  receivedEps: number;
+  acceptedEps: number;
+  droppedEps: number;
 }
 
 export const usageApi = {

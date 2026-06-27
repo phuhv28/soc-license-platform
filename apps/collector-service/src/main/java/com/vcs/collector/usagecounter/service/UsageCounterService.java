@@ -2,6 +2,7 @@ package com.vcs.collector.usagecounter.service;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -15,6 +16,16 @@ import java.time.format.DateTimeFormatter;
 @Service
 @RequiredArgsConstructor
 public class UsageCounterService {
+
+    public static class DimensionCount {
+        public long received = 0;
+        public long accepted = 0;
+        public long dropped = 0;
+        
+        public void addReceived(long n) { received += n; }
+        public void addAccepted(long n) { accepted += n; }
+        public void addDropped(long n) { dropped += n; }
+    }
 
     private final RedisTemplate<String, String> redisTemplate;
 
@@ -73,7 +84,7 @@ public class UsageCounterService {
     /**
      * Increment dimensions (agent, log source) for Top-N metrics using sorted sets
      */
-    public void incrementDimensions(String tenantId, java.util.Map<String, Long> agentCounts, java.util.Map<String, Long> logSourceCounts) {
+    public void incrementDimensions(String tenantId, java.util.Map<String, DimensionCount> agentCounts, java.util.Map<String, DimensionCount> logSourceCounts) {
         if (agentCounts.isEmpty() && logSourceCounts.isEmpty()) {
             return;
         }
@@ -88,26 +99,54 @@ public class UsageCounterService {
                 org.springframework.data.redis.serializer.RedisSerializer<String> serializer = 
                         (org.springframework.data.redis.serializer.RedisSerializer<String>) redisTemplate.getKeySerializer();
 
-                java.util.function.BiConsumer<String, java.util.Map<String, Long>> addZsets = (dimension, counts) -> {
-                    counts.forEach((item, count) -> {
-                        if (count <= 0) return;
-                        
+                java.util.function.BiConsumer<String, java.util.Map<String, DimensionCount>> addZsets = (dimension, counts) -> {
+                    counts.forEach((item, dc) -> {
                         byte[] itemBytes = serializer.serialize(item);
                         
-                        // 1m
-                        byte[] key1m = serializer.serialize(String.format("top:%s:%s:1m:%s", tenantId, dimension, window1m));
-                        connection.zSetCommands().zIncrBy(key1m, count, itemBytes);
-                        connection.keyCommands().expire(key1m, COUNTER_1M_TTL_SECONDS);
+                        // 1m keys
+                        byte[] rKey1m = serializer.serialize(String.format("top:%s:%s:received:1m:%s", tenantId, dimension, window1m));
+                        byte[] aKey1m = serializer.serialize(String.format("top:%s:%s:accepted:1m:%s", tenantId, dimension, window1m));
+                        byte[] dKey1m = serializer.serialize(String.format("top:%s:%s:dropped:1m:%s", tenantId, dimension, window1m));
 
-                        // 5m
-                        byte[] key5m = serializer.serialize(String.format("top:%s:%s:5m:%s", tenantId, dimension, window5m));
-                        connection.zSetCommands().zIncrBy(key5m, count, itemBytes);
-                        connection.keyCommands().expire(key5m, COUNTER_5M_TTL_SECONDS);
+                        // 5m keys
+                        byte[] rKey5m = serializer.serialize(String.format("top:%s:%s:received:5m:%s", tenantId, dimension, window5m));
+                        byte[] aKey5m = serializer.serialize(String.format("top:%s:%s:accepted:5m:%s", tenantId, dimension, window5m));
+                        byte[] dKey5m = serializer.serialize(String.format("top:%s:%s:dropped:5m:%s", tenantId, dimension, window5m));
 
-                        // 15m
-                        byte[] key15m = serializer.serialize(String.format("top:%s:%s:15m:%s", tenantId, dimension, window15m));
-                        connection.zSetCommands().zIncrBy(key15m, count, itemBytes);
-                        connection.keyCommands().expire(key15m, COUNTER_15M_TTL_SECONDS);
+                        // 15m keys
+                        byte[] rKey15m = serializer.serialize(String.format("top:%s:%s:received:15m:%s", tenantId, dimension, window15m));
+                        byte[] aKey15m = serializer.serialize(String.format("top:%s:%s:accepted:15m:%s", tenantId, dimension, window15m));
+                        byte[] dKey15m = serializer.serialize(String.format("top:%s:%s:dropped:15m:%s", tenantId, dimension, window15m));
+
+                        // Update Received
+                        if (dc.received > 0) {
+                            connection.zSetCommands().zIncrBy(rKey1m, dc.received, itemBytes);
+                            connection.keyCommands().expire(rKey1m, COUNTER_1M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(rKey5m, dc.received, itemBytes);
+                            connection.keyCommands().expire(rKey5m, COUNTER_5M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(rKey15m, dc.received, itemBytes);
+                            connection.keyCommands().expire(rKey15m, COUNTER_15M_TTL_SECONDS);
+                        }
+
+                        // Update Accepted
+                        if (dc.accepted > 0) {
+                            connection.zSetCommands().zIncrBy(aKey1m, dc.accepted, itemBytes);
+                            connection.keyCommands().expire(aKey1m, COUNTER_1M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(aKey5m, dc.accepted, itemBytes);
+                            connection.keyCommands().expire(aKey5m, COUNTER_5M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(aKey15m, dc.accepted, itemBytes);
+                            connection.keyCommands().expire(aKey15m, COUNTER_15M_TTL_SECONDS);
+                        }
+
+                        // Update Dropped
+                        if (dc.dropped > 0) {
+                            connection.zSetCommands().zIncrBy(dKey1m, dc.dropped, itemBytes);
+                            connection.keyCommands().expire(dKey1m, COUNTER_1M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(dKey5m, dc.dropped, itemBytes);
+                            connection.keyCommands().expire(dKey5m, COUNTER_5M_TTL_SECONDS);
+                            connection.zSetCommands().zIncrBy(dKey15m, dc.dropped, itemBytes);
+                            connection.keyCommands().expire(dKey15m, COUNTER_15M_TTL_SECONDS);
+                        }
                     });
                 };
 

@@ -2,7 +2,11 @@ package com.vcs.management.usage.dto;
 
 public record UsageDimensionResponse(
         String name,
-        long count,
-        double eps
+        long receivedCount,
+        long acceptedCount,
+        long droppedCount,
+        double receivedEps,
+        double acceptedEps,
+        double droppedEps
 ) {
 }

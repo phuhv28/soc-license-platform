@@ -49,16 +49,16 @@ public class UsageApiService {
 
         // Try current minute
         String currentWindow = getMinuteWindow(now);
-        long accepted = getCounterValue(tenantId.toString(), "accepted", "1m", currentWindow);
+        long received = getCounterValue(tenantId.toString(), "received", "1m", currentWindow);
 
-        if (accepted == 0) {
+        if (received == 0) {
             // Fall back to previous minute (counter may not have accumulated yet)
             String prevWindow = getMinuteWindow(now - 60);
-            accepted = getCounterValue(tenantId.toString(), "accepted", "1m", prevWindow);
+            received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
         }
 
         // Convert events-per-minute to events-per-second
-        return accepted / 60;
+        return received / 60;
     }
 
     /**
@@ -261,23 +261,50 @@ public class UsageApiService {
             windowSeconds = 60;
         }
 
-        String key = String.format("top:%s:%s:%s:%s", tenantId, dimension, window, timeKey);
+        String receivedKey = String.format("top:%s:%s:received:%s:%s", tenantId, dimension, window, timeKey);
+        String acceptedKey = String.format("top:%s:%s:accepted:%s:%s", tenantId, dimension, window, timeKey);
+        String droppedKey = String.format("top:%s:%s:dropped:%s:%s", tenantId, dimension, window, timeKey);
 
         java.util.Set<org.springframework.data.redis.core.ZSetOperations.TypedTuple<String>> tuples = 
-                redisTemplate.opsForZSet().reverseRangeWithScores(key, 0, limit - 1);
+                redisTemplate.opsForZSet().reverseRangeWithScores(receivedKey, 0, limit - 1);
 
         if (tuples == null || tuples.isEmpty()) {
             return java.util.Collections.emptyList();
         }
 
         List<com.vcs.management.usage.dto.UsageDimensionResponse> results = new ArrayList<>();
+        
+        // Execute pipelined query to fetch accepted and dropped scores efficiently
+        List<Object> pipelineResults = redisTemplate.executePipelined((org.springframework.data.redis.connection.RedisConnection connection) -> {
+            org.springframework.data.redis.serializer.RedisSerializer<String> serializer = 
+                    (org.springframework.data.redis.serializer.RedisSerializer<String>) redisTemplate.getKeySerializer();
+            byte[] aKey = serializer.serialize(acceptedKey);
+            byte[] dKey = serializer.serialize(droppedKey);
+            
+            for (org.springframework.data.redis.core.ZSetOperations.TypedTuple<String> tuple : tuples) {
+                byte[] itemBytes = serializer.serialize(tuple.getValue());
+                connection.zSetCommands().zScore(aKey, itemBytes);
+                connection.zSetCommands().zScore(dKey, itemBytes);
+            }
+            return null;
+        });
+
+        int i = 0;
         for (org.springframework.data.redis.core.ZSetOperations.TypedTuple<String> tuple : tuples) {
             String name = tuple.getValue();
-            long count = tuple.getScore() != null ? tuple.getScore().longValue() : 0;
-            double eps = (double) count / windowSeconds;
-            // Round to 2 decimal places
-            eps = Math.round(eps * 100.0) / 100.0;
-            results.add(new com.vcs.management.usage.dto.UsageDimensionResponse(name, count, eps));
+            long receivedCount = tuple.getScore() != null ? tuple.getScore().longValue() : 0;
+            
+            Double aScore = (Double) pipelineResults.get(i * 2);
+            Double dScore = (Double) pipelineResults.get(i * 2 + 1);
+            long acceptedCount = aScore != null ? aScore.longValue() : 0;
+            long droppedCount = dScore != null ? dScore.longValue() : 0;
+            
+            double rEps = Math.round(((double) receivedCount / windowSeconds) * 100.0) / 100.0;
+            double aEps = Math.round(((double) acceptedCount / windowSeconds) * 100.0) / 100.0;
+            double dEps = Math.round(((double) droppedCount / windowSeconds) * 100.0) / 100.0;
+            
+            results.add(new com.vcs.management.usage.dto.UsageDimensionResponse(name, receivedCount, acceptedCount, droppedCount, rEps, aEps, dEps));
+            i++;
         }
 
         return results;

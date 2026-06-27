@@ -287,8 +287,16 @@
   background: var(--color-info); /* Teal */
 }
 
+.progress-bar-fill.success {
+  background: var(--color-success);
+}
+
 .progress-bar-fill.secondary {
   background: var(--color-warning); /* Orange for remaining or dropped */
+}
+
+.progress-bar-fill.warning {
+  background: var(--color-warning);
 }
 
 .progress-bar-fill.danger {
