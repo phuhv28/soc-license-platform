@@ -62,17 +62,29 @@ public class UsageController {
     @GetMapping("/{tenantId}/history")
     public ApiResponse<UsageHistoryResponse> getUsageHistory(
             @PathVariable UUID tenantId,
-            @RequestParam(defaultValue = "24") int hours
+            @RequestParam(defaultValue = "1m") String window,
+            @RequestParam(required = false) Integer hours,
+            @RequestParam(required = false) Integer limit
     ) {
         Tenant tenant = findTenant(tenantId);
 
+        int actualLimit = 60;
+        if (limit != null) {
+            actualLimit = limit;
+        } else if (hours != null) {
+            if ("1m".equals(window)) actualLimit = hours * 60;
+            else if ("5m".equals(window)) actualLimit = (hours * 60) / 5;
+            else if ("15m".equals(window)) actualLimit = (hours * 60) / 15;
+            else if ("1d".equals(window)) actualLimit = Math.max(1, hours / 24);
+        }
+
         List<UsageHistoryResponse.DataPoint> dataPoints =
-                usageApiService.getUsageHistory(tenantId, hours);
+                usageApiService.getUsageHistory(tenantId, window, actualLimit);
 
         UsageHistoryResponse response = new UsageHistoryResponse(
                 tenant.getTenantId(),
                 tenant.getName(),
-                "1m",
+                window,
                 dataPoints
         );
 

@@ -118,25 +118,25 @@ class UsageApiServiceTest {
     class GetUsageHistoryTests {
 
         @Test
-        @DisplayName("should return list of data points")
+        @DisplayName("should return list of data points with correct size")
         void shouldReturnDataPoints() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
             when(valueOps.get(anyString())).thenReturn("0");
 
-            List<UsageHistoryResponse.DataPoint> result = usageApiService.getUsageHistory(tenantId, 1);
+            List<UsageHistoryResponse.DataPoint> result = usageApiService.getUsageHistory(tenantId, "1m", 60);
 
-            assertEquals(60, result.size()); // 1 hour = 60 minutes
+            assertEquals(60, result.size()); 
         }
 
         @Test
-        @DisplayName("should clamp hours to max 48")
-        void shouldClampHours() {
+        @DisplayName("should return at least 1 point for negative limit")
+        void shouldClampLimit() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
             when(valueOps.get(anyString())).thenReturn("0");
 
-            List<UsageHistoryResponse.DataPoint> result = usageApiService.getUsageHistory(tenantId, 100);
+            List<UsageHistoryResponse.DataPoint> result = usageApiService.getUsageHistory(tenantId, "1m", -5);
 
-            assertEquals(48 * 60, result.size()); // clamped to 48h
+            assertEquals(1, result.size()); 
         }
     }
 

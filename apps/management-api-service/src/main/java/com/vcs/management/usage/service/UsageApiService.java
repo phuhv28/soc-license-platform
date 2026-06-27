@@ -162,22 +162,44 @@ public class UsageApiService {
      * @param hours    number of hours of history to retrieve (max 48)
      * @return list of data points with timestamp, received, accepted, dropped
      */
-    public List<UsageHistoryResponse.DataPoint> getUsageHistory(UUID tenantId, int hours) {
-        int clampedHours = Math.min(Math.max(hours, 1), 48);
-        int totalMinutes = clampedHours * 60;
+    public List<UsageHistoryResponse.DataPoint> getUsageHistory(UUID tenantId, String window, int limit) {
         long nowSeconds = System.currentTimeMillis() / 1000;
-
         List<UsageHistoryResponse.DataPoint> dataPoints = new ArrayList<>();
         String tid = tenantId.toString();
 
-        for (int i = totalMinutes - 1; i >= 0; i--) {
-            long targetSeconds = nowSeconds - (i * 60L);
-            String minuteWindow = getMinuteWindow(targetSeconds);
-            String displayTimestamp = getDisplayMinuteWindow(targetSeconds);
+        int stepSeconds;
+        if ("5m".equals(window)) stepSeconds = 300;
+        else if ("15m".equals(window)) stepSeconds = 900;
+        else if ("1d".equals(window)) stepSeconds = 86400;
+        else {
+            window = "1m";
+            stepSeconds = 60;
+        }
 
-            long received = getCounterValue(tid, "received", "1m", minuteWindow);
-            long accepted = getCounterValue(tid, "accepted", "1m", minuteWindow);
-            long dropped = getCounterValue(tid, "dropped", "1m", minuteWindow);
+        // Ensure we always return at least 1 point
+        if (limit <= 0) limit = 1;
+
+        for (int i = limit - 1; i >= 0; i--) {
+            long targetSeconds = nowSeconds - (i * stepSeconds);
+            String timeKey;
+            String displayTimestamp;
+
+            if ("1d".equals(window)) {
+                timeKey = getDayWindow(targetSeconds);
+                displayTimestamp = Instant.ofEpochSecond(targetSeconds)
+                        .atZone(ZoneId.systemDefault())
+                        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            } else if ("5m".equals(window) || "15m".equals(window)) {
+                timeKey = getFloorMinuteWindow(targetSeconds, stepSeconds / 60);
+                displayTimestamp = getDisplayMinuteWindow(getFlooredSeconds(targetSeconds, stepSeconds / 60));
+            } else {
+                timeKey = getMinuteWindow(targetSeconds);
+                displayTimestamp = getDisplayMinuteWindow(targetSeconds);
+            }
+
+            long received = getCounterValue(tid, "received", window, timeKey);
+            long accepted = getCounterValue(tid, "accepted", window, timeKey);
+            long dropped = getCounterValue(tid, "dropped", window, timeKey);
 
             dataPoints.add(new UsageHistoryResponse.DataPoint(
                     displayTimestamp, received, accepted, dropped));
@@ -282,6 +304,14 @@ public class UsageApiService {
         int flooredMinute = (minute / minuteInterval) * minuteInterval;
         return zdt.withMinute(flooredMinute).withSecond(0).withNano(0)
                 .format(MINUTE_FORMATTER);
+    }
+
+    private long getFlooredSeconds(long unixSeconds, int minuteInterval) {
+        java.time.ZonedDateTime zdt = Instant.ofEpochSecond(unixSeconds)
+                .atZone(ZoneId.systemDefault());
+        int minute = zdt.getMinute();
+        int flooredMinute = (minute / minuteInterval) * minuteInterval;
+        return zdt.withMinute(flooredMinute).withSecond(0).withNano(0).toEpochSecond();
     }
 
     public String getDayWindow(long unixSeconds) {

@@ -38,11 +38,19 @@ export interface UsageSummaryResponse {
   tenants: TenantUsage[];
 }
 
+export interface UsageDimensionResponse {
+  name: string;
+  count: number;
+  eps: number;
+}
+
 export const usageApi = {
   getCurrent: (tenantId: string) =>
     client.get(`/api/v1/usage/${tenantId}/current`).then(r => r.data.data as UsageResponse),
-  getHistory: (tenantId: string, hours = 24) =>
-    client.get(`/api/v1/usage/${tenantId}/history?hours=${hours}`).then(r => r.data.data as UsageHistoryResponse),
+  getHistory: (tenantId: string, window = '1m', limit = 60) =>
+    client.get(`/api/v1/usage/${tenantId}/history?window=${window}&limit=${limit}`).then(r => r.data.data as UsageHistoryResponse),
   getSummary: () =>
     client.get('/api/v1/usage/summary').then(r => r.data.data as UsageSummaryResponse),
+  getTopDimensions: (tenantId: string, dimension: string, window = '5m', limit = 10) =>
+    client.get(`/api/v1/usage/${tenantId}/dimensions/top?dimension=${dimension}&window=${window}&limit=${limit}`).then(r => r.data.data as UsageDimensionResponse[]),
 };

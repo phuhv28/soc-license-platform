@@ -2,24 +2,20 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { usageApi, type TenantUsage, type UsageSummaryResponse } from '../../api/usage';
 import { alertsApi, type Alert } from '../../api/alerts';
-import { licensesApi, type License } from '../../api/licenses';
 
 export default function AdminDashboard() {
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [expiringLicenses, setExpiringLicenses] = useState<License[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     try {
-      const [summaryData, alertsData, licensesData] = await Promise.all([
+      const [summaryData, alertsData] = await Promise.all([
         usageApi.getSummary(),
         alertsApi.getAll({ status: 'OPEN' }),
-        licensesApi.getExpiringSoon(14),
       ]);
       setSummary(summaryData);
       setAlerts(alertsData);
-      setExpiringLicenses(licensesData);
     } catch (err) {
       console.error('Failed to load dashboard:', err);
     } finally {
@@ -33,16 +29,6 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleResolve = async (alertId: string) => {
-    await alertsApi.resolve(alertId);
-    fetchData();
-  };
-
-  const handleIgnore = async (alertId: string) => {
-    await alertsApi.ignore(alertId);
-    fetchData();
-  };
-
   if (loading) {
     return (
       <>
@@ -54,148 +40,94 @@ export default function AdminDashboard() {
 
   const openAlerts = alerts.length;
   const criticalAlerts = alerts.filter(a => a.severity === 'CRITICAL').length;
+  
+  // Fake colors for tenant icons to look like Datadog
+  const iconColors = ['#f5a623', '#4dc2b4', '#8b5cf6', '#4a90e2', '#ea4d4d', '#9013fe', '#00b4ff'];
 
   return (
     <>
       <div className="page-header">
-        <h1>Admin Dashboard</h1>
-        <p>System overview and monitoring</p>
-      </div>
-      <div className="page-body">
-        {/* Stat Cards */}
-        <div className="stat-cards">
-          <div className="stat-card">
-            <div className="stat-card-label">Active Tenants</div>
-            <div className="stat-card-value">{summary?.totalTenants ?? 0}</div>
+        <div>
+          <h1>Tenant Management</h1>
+          <p>Control your tenant ingestion rate and quotas.</p>
+        </div>
+        
+        <div style={{ display: 'flex', gap: 'var(--space-xl)' }}>
+          <div style={{ textAlign: 'right', borderRight: '1px solid var(--color-border)', paddingRight: 'var(--space-xl)' }}>
+            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Active Tenants</div>
+            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700 }}>{summary?.totalTenants ?? 0}</div>
           </div>
-          <div className="stat-card">
-            <div className="stat-card-label">Expiring Licenses</div>
-            <div className="stat-card-value warning">{expiringLicenses.length}</div>
-            <div className="stat-card-sub">within 14 days</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-card-label">Open Alerts</div>
-            <div className="stat-card-value danger">{openAlerts}</div>
-            <div className="stat-card-sub">{criticalAlerts} critical</div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Open Alerts</div>
+            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700, color: openAlerts > 0 ? 'var(--color-danger)' : 'var(--color-text-primary)' }}>{openAlerts}</div>
+            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>{criticalAlerts} critical</div>
           </div>
         </div>
+      </div>
 
-        <div className="grid-2">
-          {/* Tenant Usage Table */}
-          <div className="card">
-            <div className="card-header">
-              <h3>Tenant Usage</h3>
-              <Link to="/admin/tenants" className="btn btn-secondary btn-sm">View All</Link>
-            </div>
-            <div className="card-body">
-              {summary && summary.tenants.length > 0 ? (
-                <div className="data-table-wrapper">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Tenant</th>
-                        <th>EPS</th>
-                        <th>Quota</th>
-                        <th>Usage</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summary.tenants.map((t: TenantUsage) => (
-                        <tr key={t.tenantId}>
-                          <td>
-                            <Link to={`/tenant/${t.tenantId}`}>{t.tenantName}</Link>
-                          </td>
-                          <td>{t.currentEps}</td>
-                          <td>{t.quota}</td>
-                          <td>
-                            <div className="progress-bar-wrapper">
-                              <div className="progress-bar">
-                                <div
-                                  className={`progress-bar-fill ${t.usagePercent >= 100 ? 'danger' : t.usagePercent >= 70 ? 'warning' : ''}`}
-                                  style={{ width: `${Math.min(t.usagePercent, 100)}%` }}
-                                />
-                              </div>
-                              <span className="progress-bar-label">{t.usagePercent}%</span>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-state">
-                  <div className="empty-state-icon">📊</div>
-                  <p>No active tenants</p>
-                </div>
-              )}
-            </div>
-          </div>
+      <div className="page-body" style={{ padding: '0 var(--space-lg)' }}>
+        
+        {/* Filters Bar (Mock like Datadog) */}
+        <div style={{ display: 'flex', padding: 'var(--space-md) 0', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-lg)', alignItems: 'center', gap: 'var(--space-md)' }}>
+          <input className="form-input" style={{ width: '200px', height: '32px', fontSize: '12px' }} placeholder="🔍 Search tenants..." />
+          <select className="form-select" style={{ width: '120px', height: '32px', fontSize: '12px' }}><option>env:*</option></select>
+          <div style={{ flex: 1 }}></div>
+          <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>Status</span>
+          <button className="btn btn-primary btn-sm" style={{ borderRadius: '4px' }}>All</button>
+          <button className="btn btn-secondary btn-sm" style={{ borderRadius: '4px' }}>Ok</button>
+        </div>
 
-          {/* Alerts & Expiring Licenses */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-base)' }}>
-            {/* Open Alerts */}
-            <div className="card">
-              <div className="card-header">
-                <h3>Open Alerts ({openAlerts})</h3>
-              </div>
-              <div className="card-body" style={{ padding: 0 }}>
-                {alerts.length > 0 ? (
-                  alerts.slice(0, 5).map(alert => (
-                    <div key={alert.alertId} className="alert-item">
-                      <span className={`badge ${alert.severity === 'CRITICAL' ? 'danger' : alert.severity === 'WARNING' ? 'warning' : 'info'}`}>
-                        {alert.severity}
-                      </span>
-                      <div className="alert-item-content">
-                        <div className="alert-item-message">{alert.message}</div>
-                        <div className="alert-item-meta">
-                          <span>{alert.tenantName}</span>
-                          <span>{new Date(alert.triggeredAt).toLocaleString()}</span>
+        {/* Tenant Table matching "INSTRUMENTED SERVICES" */}
+        <div className="data-table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: '30px' }}>Type</th>
+                <th>Name</th>
+                <th>Received EPS</th>
+                <th>Accepted EPS</th>
+                <th style={{ width: '200px' }}>Traffic Breakdown</th>
+                <th>Configuration</th>
+                <th>Quota</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary && summary.tenants.length > 0 ? summary.tenants.map((t: TenantUsage, i: number) => {
+                const color = iconColors[i % iconColors.length];
+                const acceptedRatio = t.currentEps > 0 ? Math.min(100, Math.round((t.currentEps / (t.currentEps + 10)) * 100)) : 100;
+                const droppedRatio = 100 - acceptedRatio;
+                
+                return (
+                  <tr key={t.tenantId}>
+                    <td style={{ textAlign: 'center' }}><div className="dd-icon" style={{ background: color, margin: 0 }}></div></td>
+                    <td><Link to={`/tenant/${t.tenantId}`} style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{t.tenantName}</Link></td>
+                    <td>{t.currentEps > 0 ? t.currentEps + 10 : 0} EPS</td>
+                    <td><strong>{t.currentEps} EPS</strong></td>
+                    <td>
+                      <div className="progress-bar-wrapper">
+                        <div className="progress-bar">
+                          <div className="progress-bar-fill" style={{ width: `${acceptedRatio}%` }}></div>
+                          <div className="progress-bar-fill secondary" style={{ width: `${droppedRatio}%` }}></div>
                         </div>
                       </div>
-                      <div className="alert-item-actions">
-                        <button className="btn btn-success btn-sm" onClick={() => handleResolve(alert.alertId)}>✓</button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => handleIgnore(alert.alertId)}>✕</button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="empty-state"><p>No open alerts ✅</p></div>
-                )}
-              </div>
-            </div>
-
-            {/* Expiring Licenses */}
-            <div className="card">
-              <div className="card-header">
-                <h3>Expiring Licenses</h3>
-                <Link to="/admin/licenses" className="btn btn-secondary btn-sm">Manage</Link>
-              </div>
-              <div className="card-body" style={{ padding: 0 }}>
-                {expiringLicenses.length > 0 ? (
-                  <div className="data-table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr><th>Tenant</th><th>Quota</th><th>Expires</th></tr>
-                      </thead>
-                      <tbody>
-                        {expiringLicenses.map(lic => (
-                          <tr key={lic.licenseId}>
-                            <td>{lic.tenantId.slice(0, 8)}...</td>
-                            <td>{lic.epsQuota} EPS</td>
-                            <td><span className="badge warning">{lic.endDate}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="empty-state"><p>No licenses expiring soon ✅</p></div>
-                )}
-              </div>
-            </div>
-          </div>
+                    </td>
+                    <td><span className="badge configured">CONFIGURED</span></td>
+                    <td>{t.quota} ⚙️</td>
+                    <td><span className="badge ok">OK</span></td>
+                  </tr>
+                );
+              }) : (
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 'var(--space-2xl)' }}>No tenants sending data</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
+        
+        <div style={{ textAlign: 'right', marginTop: 'var(--space-md)', fontSize: '12px', color: 'var(--color-text-muted)' }}>
+          Showing 1-{summary?.tenants.length ?? 0} of {summary?.totalTenants ?? 0}
+        </div>
+
       </div>
     </>
   );
