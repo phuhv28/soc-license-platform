@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -14,7 +15,7 @@ import (
 )
 
 var (
-	tokenBucketScript = redis.NewScript(`
+	tokenPrefetchScript = redis.NewScript(`
 		local quota = tonumber(KEYS[1])
 		local tokens_key = KEYS[2]
 		local timestamp_key = KEYS[3]
@@ -26,6 +27,9 @@ var (
 
 		local fill_time = capacity / rate
 		local ttl = math.floor(fill_time * 2)
+		if ttl < 60 then
+			ttl = 60
+		end
 
 		local last_tokens = tonumber(redis.call("get", tokens_key))
 		if last_tokens == nil then
@@ -39,29 +43,67 @@ var (
 
 		local delta = math.max(0, now - last_refreshed)
 		local filled_tokens = math.min(capacity, last_tokens + (delta * rate))
-		local allowed = filled_tokens >= requested
-		local new_tokens = filled_tokens
-		local accepted_count = 0
-
-		if allowed then
-			new_tokens = filled_tokens - requested
-			accepted_count = requested
+		
+		local granted = 0
+		if filled_tokens >= requested then
+			granted = requested
+			filled_tokens = filled_tokens - requested
 		else
-			accepted_count = math.floor(filled_tokens)
-			new_tokens = filled_tokens - accepted_count
+			granted = math.floor(filled_tokens)
+			filled_tokens = filled_tokens - granted
 		end
 
-		redis.call("setex", tokens_key, ttl, new_tokens)
+		redis.call("setex", tokens_key, ttl, filled_tokens)
 		redis.call("setex", timestamp_key, ttl, now)
 
-		return accepted_count
+		return granted
 	`)
 )
+
+type tenantDimensionMetrics struct {
+	Received int64
+	Accepted int64
+	Dropped  int64
+}
+
+type tenantMetrics struct {
+	TotalReceived int64
+	TotalAccepted int64
+	TotalDropped  int64
+
+	AgentMetrics     map[string]*tenantDimensionMetrics
+	LogSourceMetrics map[string]*tenantDimensionMetrics
+}
+
+func newTenantMetrics() *tenantMetrics {
+	return &tenantMetrics{
+		AgentMetrics:     make(map[string]*tenantDimensionMetrics),
+		LogSourceMetrics: make(map[string]*tenantDimensionMetrics),
+	}
+}
+
+type tenantState struct {
+	mu     sync.Mutex
+	tokens int64
+	
+	metricsMu sync.Mutex
+	metrics   *tenantMetrics
+}
+
+func newTenantState() *tenantState {
+	return &tenantState{
+		metrics: newTenantMetrics(),
+	}
+}
 
 type socLicenseProcessor struct {
 	client       *redis.Client
 	nextConsumer consumer.Logs
 	logger       *zap.Logger
+
+	statesMu sync.RWMutex
+	states   map[string]*tenantState
+	cancel   context.CancelFunc
 }
 
 func newSocLicenseProcessor(cfg *Config, nextConsumer consumer.Logs, logger *zap.Logger) (*socLicenseProcessor, error) {
@@ -69,7 +111,6 @@ func newSocLicenseProcessor(cfg *Config, nextConsumer consumer.Logs, logger *zap
 		Addr: cfg.RedisURL,
 	})
 	
-	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
@@ -80,14 +121,40 @@ func newSocLicenseProcessor(cfg *Config, nextConsumer consumer.Logs, logger *zap
 		client:       client,
 		nextConsumer: nextConsumer,
 		logger:       logger,
+		states:       make(map[string]*tenantState),
 	}, nil
 }
 
+func (p *socLicenseProcessor) getTenantState(tenantID string) *tenantState {
+	p.statesMu.RLock()
+	state, ok := p.states[tenantID]
+	p.statesMu.RUnlock()
+
+	if ok {
+		return state
+	}
+
+	p.statesMu.Lock()
+	defer p.statesMu.Unlock()
+	state, ok = p.states[tenantID]
+	if !ok {
+		state = newTenantState()
+		p.states[tenantID] = state
+	}
+	return state
+}
+
 func (p *socLicenseProcessor) Start(ctx context.Context, host component.Host) error {
+	syncCtx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	go p.syncMetricsLoop(syncCtx)
 	return nil
 }
 
 func (p *socLicenseProcessor) Shutdown(ctx context.Context) error {
+	if p.cancel != nil {
+		p.cancel()
+	}
 	return p.client.Close()
 }
 
@@ -96,34 +163,11 @@ func (p *socLicenseProcessor) Capabilities() consumer.Capabilities {
 }
 
 func (p *socLicenseProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
-	p.logger.Debug("ConsumeLogs invoked", zap.Int("resource_logs_count", ld.ResourceLogs().Len()))
-
 	nowMs := time.Now().UnixMilli()
-	nowSec := nowMs / 1000
+	nowFloat := float64(nowMs) / 1000.0
 
-	window1m := getMinuteWindow(nowSec)
-	window5m := getFloorMinuteWindow(nowSec, 5)
-	window15m := getFloorMinuteWindow(nowSec, 15)
-	window1d := getDayWindow(nowSec)
-
-	var totalReceived int64
 	var totalAccepted int64
-	var totalDropped int64
 
-	// Dimensions tracking per tenant
-	// tenantID -> agent -> count
-	agentReceived := make(map[string]map[string]int64)
-	agentAccepted := make(map[string]map[string]int64)
-	agentDropped := make(map[string]map[string]int64)
-
-	logSourceReceived := make(map[string]map[string]int64)
-	logSourceAccepted := make(map[string]map[string]int64)
-	logSourceDropped := make(map[string]map[string]int64)
-
-	tenantReceivedTotal := make(map[string]int64)
-	tenantAcceptedTotal := make(map[string]int64)
-
-	// Filter logs and compute metrics
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
 		tenantID := "unknown"
@@ -136,59 +180,77 @@ func (p *socLicenseProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) err
 			agentName = val.Str()
 		}
 
-		if agentReceived[tenantID] == nil {
-			agentReceived[tenantID] = make(map[string]int64)
-			agentAccepted[tenantID] = make(map[string]int64)
-			agentDropped[tenantID] = make(map[string]int64)
-			logSourceReceived[tenantID] = make(map[string]int64)
-			logSourceAccepted[tenantID] = make(map[string]int64)
-			logSourceDropped[tenantID] = make(map[string]int64)
-		}
-
-		// Count records in this resource log
 		var resourceRecordsCount int64 = 0
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
 			resourceRecordsCount += int64(sl.LogRecords().Len())
 		}
-		tenantReceivedTotal[tenantID] += resourceRecordsCount
-		totalReceived += resourceRecordsCount
 
-		// Rate limit check
-		quotaStr, _ := p.client.Get(ctx, "quota:"+tenantID).Result()
-		quota, _ := strconv.ParseInt(quotaStr, 10, 64)
-		if quota <= 0 {
-			quota = 100 // default fallback
+		if resourceRecordsCount == 0 {
+			continue
 		}
 
-		keys := []string{
-			fmt.Sprintf("%d", quota),
-			fmt.Sprintf("rl:tokens:%s", tenantID),
-			fmt.Sprintf("rl:ts:%s", tenantID),
-		}
-		nowFloat := float64(nowMs) / 1000.0
+		state := p.getTenantState(tenantID)
+		
+		state.mu.Lock()
+		if state.tokens < resourceRecordsCount {
+			needed := resourceRecordsCount - state.tokens
+			prefetch := int64(200) // Default batch size
+			if needed > prefetch {
+				prefetch = needed
+			}
 
-		acceptedCountIntf, err := tokenBucketScript.Run(ctx, p.client, keys, nowFloat, resourceRecordsCount).Result()
+			// Prefetch from Redis synchronously to guarantee limits
+			quotaStr, _ := p.client.Get(ctx, "quota:"+tenantID).Result()
+			quota, _ := strconv.ParseInt(quotaStr, 10, 64)
+			if quota <= 0 {
+				quota = 100 // default fallback
+			}
+
+			keys := []string{
+				fmt.Sprintf("%d", quota),
+				fmt.Sprintf("rl:tokens:%s", tenantID),
+				fmt.Sprintf("rl:ts:%s", tenantID),
+			}
+			grantedIntf, err := tokenPrefetchScript.Run(ctx, p.client, keys, nowFloat, prefetch).Result()
+			if err == nil {
+				state.tokens += grantedIntf.(int64)
+			} else {
+				p.logger.Warn("Failed to prefetch tokens", zap.Error(err))
+			}
+		}
+
 		var acceptedCount int64 = 0
-		if err == nil {
-			acceptedCount = acceptedCountIntf.(int64)
+		if state.tokens >= resourceRecordsCount {
+			acceptedCount = resourceRecordsCount
+			state.tokens -= resourceRecordsCount
+		} else {
+			acceptedCount = state.tokens
+			state.tokens = 0
 		}
+		state.mu.Unlock()
 
-		tenantAcceptedTotal[tenantID] += acceptedCount
-		totalAccepted += acceptedCount
 		droppedCount := resourceRecordsCount - acceptedCount
-		totalDropped += droppedCount
+		totalAccepted += acceptedCount
 
-		agentReceived[tenantID][agentName] += resourceRecordsCount
-		agentAccepted[tenantID][agentName] += acceptedCount
-		agentDropped[tenantID][agentName] += droppedCount
-
-		// Now filter the actual logs
+		// Filter logs
 		var currentAccepted int64 = 0
+		
+		// Record local metrics safely
+		state.metricsMu.Lock()
+		state.metrics.TotalReceived += resourceRecordsCount
+		state.metrics.TotalAccepted += acceptedCount
+		state.metrics.TotalDropped += droppedCount
+		
+		if _, ok := state.metrics.AgentMetrics[agentName]; !ok {
+			state.metrics.AgentMetrics[agentName] = &tenantDimensionMetrics{}
+		}
+		state.metrics.AgentMetrics[agentName].Received += resourceRecordsCount
+		state.metrics.AgentMetrics[agentName].Accepted += acceptedCount
+		state.metrics.AgentMetrics[agentName].Dropped += droppedCount
+
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
-			
-			// We need to build a new log records slice containing only accepted logs
 			newRecords := sl.LogRecords()
 			newRecords.RemoveIf(func(lr plog.LogRecord) bool {
 				logSource := "unknown"
@@ -196,54 +258,25 @@ func (p *socLicenseProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) err
 					logSource = val.Str()
 				}
 				
-				logSourceReceived[tenantID][logSource]++
+				if _, ok := state.metrics.LogSourceMetrics[logSource]; !ok {
+					state.metrics.LogSourceMetrics[logSource] = &tenantDimensionMetrics{}
+				}
+				state.metrics.LogSourceMetrics[logSource].Received++
 
 				if currentAccepted < acceptedCount {
 					currentAccepted++
-					logSourceAccepted[tenantID][logSource]++
+					state.metrics.LogSourceMetrics[logSource].Accepted++
 					return false // keep
 				} else {
-					logSourceDropped[tenantID][logSource]++
+					state.metrics.LogSourceMetrics[logSource].Dropped++
 					return true // drop
 				}
 			})
 		}
+		state.metricsMu.Unlock()
 	}
 
-	// Update Redis Metrics
-	pipe := p.client.Pipeline()
-	for tenantID, received := range tenantReceivedTotal {
-		accepted := tenantAcceptedTotal[tenantID]
-		dropped := received - accepted
-
-		// Global counters
-		incrementWindowCounters(pipe, tenantID, "1m", window1m, received, accepted, dropped, 48*time.Hour)
-		incrementWindowCounters(pipe, tenantID, "5m", window5m, received, accepted, dropped, 7*24*time.Hour)
-		incrementWindowCounters(pipe, tenantID, "15m", window15m, received, accepted, dropped, 14*24*time.Hour)
-		incrementWindowCounters(pipe, tenantID, "1d", window1d, received, accepted, dropped, 90*24*time.Hour)
-
-		// Dimension Counters - Agent
-		for agent, rec := range agentReceived[tenantID] {
-			acc := agentAccepted[tenantID][agent]
-			drp := agentDropped[tenantID][agent]
-			incrementDimension(pipe, tenantID, "agent", agent, window1m, window5m, window15m, rec, acc, drp)
-		}
-
-		// Dimension Counters - Log Source
-		for ls, rec := range logSourceReceived[tenantID] {
-			acc := logSourceAccepted[tenantID][ls]
-			drp := logSourceDropped[tenantID][ls]
-			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, rec, acc, drp)
-		}
-	}
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		p.logger.Error("Failed to update redis metrics", zap.Error(err))
-	}
-
-	// Pass accepted logs to the next consumer
 	if totalAccepted > 0 {
-		// Clean up empty ScopeLogs and ResourceLogs
 		ld.ResourceLogs().RemoveIf(func(rl plog.ResourceLogs) bool {
 			rl.ScopeLogs().RemoveIf(func(sl plog.ScopeLogs) bool {
 				return sl.LogRecords().Len() == 0
@@ -257,6 +290,79 @@ func (p *socLicenseProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) err
 	}
 
 	return nil
+}
+
+func (p *socLicenseProcessor) syncMetricsLoop(ctx context.Context) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.flushMetricsToRedis()
+		}
+	}
+}
+
+func (p *socLicenseProcessor) flushMetricsToRedis() {
+	nowSec := time.Now().Unix()
+	window1m := getMinuteWindow(nowSec)
+	window5m := getFloorMinuteWindow(nowSec, 5)
+	window15m := getFloorMinuteWindow(nowSec, 15)
+	window1d := getDayWindow(nowSec)
+
+	pipe := p.client.Pipeline()
+	hasData := false
+
+	p.statesMu.RLock()
+	// Copy tenant IDs to avoid holding statesMu too long
+	var tenantIDs []string
+	for tenantID := range p.states {
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	p.statesMu.RUnlock()
+
+	for _, tenantID := range tenantIDs {
+		state := p.getTenantState(tenantID)
+		
+		state.metricsMu.Lock()
+		// Swap metrics to reset counters quickly
+		currentMetrics := state.metrics
+		state.metrics = newTenantMetrics()
+		state.metricsMu.Unlock()
+
+		if currentMetrics.TotalReceived == 0 {
+			continue
+		}
+		hasData = true
+
+		received := currentMetrics.TotalReceived
+		accepted := currentMetrics.TotalAccepted
+		dropped := currentMetrics.TotalDropped
+
+		incrementWindowCounters(pipe, tenantID, "1m", window1m, received, accepted, dropped, 48*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "5m", window5m, received, accepted, dropped, 7*24*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "15m", window15m, received, accepted, dropped, 14*24*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "1d", window1d, received, accepted, dropped, 90*24*time.Hour)
+
+		for agent, m := range currentMetrics.AgentMetrics {
+			incrementDimension(pipe, tenantID, "agent", agent, window1m, window5m, window15m, m.Received, m.Accepted, m.Dropped)
+		}
+
+		for ls, m := range currentMetrics.LogSourceMetrics {
+			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, m.Received, m.Accepted, m.Dropped)
+		}
+	}
+
+	if hasData {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := pipe.Exec(ctx); err != nil {
+			p.logger.Error("Failed to flush redis metrics", zap.Error(err))
+		}
+	}
 }
 
 func incrementWindowCounters(pipe redis.Pipeliner, tenantId, windowType, windowKey string, received, accepted, dropped int64, ttl time.Duration) {
@@ -284,13 +390,10 @@ func incrementDimension(pipe redis.Pipeliner, tenantId, dimType, dimValue, windo
 		"15m": window15m,
 	}
 
-	ttl1m := 48 * time.Hour
-	ttl5m := 7 * 24 * time.Hour
-	ttl15m := 14 * 24 * time.Hour
 	ttls := map[string]time.Duration{
-		"1m":  ttl1m,
-		"5m":  ttl5m,
-		"15m": ttl15m,
+		"1m":  48 * time.Hour,
+		"5m":  7 * 24 * time.Hour,
+		"15m": 14 * 24 * time.Hour,
 	}
 
 	for wType, wKey := range windows {
@@ -312,8 +415,6 @@ func incrementDimension(pipe redis.Pipeliner, tenantId, dimType, dimValue, windo
 		}
 	}
 }
-
-// Time Utils
 
 func getMinuteWindow(unixSeconds int64) string {
 	return time.Unix(unixSeconds, 0).Format("200601021504")
