@@ -50,26 +50,6 @@ services:
       redis:
         condition: service_healthy
 
-  collector-service:
-    build:
-      context: ./apps/collector-service
-    container_name: collector-service
-    ports:
-      - "8081:8081"
-    environment:
-      SERVER_PORT: 8081
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: soc_license
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   frontend:
     build:
@@ -82,20 +62,7 @@ services:
       - "3000:3000"
     depends_on:
       - management-api-service
-      - collector-service
 
-  event-producer:
-    build:
-      context: ./apps/event-producer
-    container_name: event-producer
-    environment:
-      COLLECTOR_URL: http://collector-service:8081
-      TENANT_IDS: 481a6ae5-8e14-4899-80b3-d95feb5a3395
-      EPS: 100
-      BATCH_SIZE: 50
-    depends_on:
-      - collector-service
-      - management-api-service
 
   event-producer-otel:
     build:
