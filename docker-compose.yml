@@ -97,6 +97,29 @@ services:
       - collector-service
       - management-api-service
 
+  event-producer-otel:
+    build:
+      context: ./apps/event-producer-otel
+    container_name: event-producer-otel
+    environment:
+      COLLECTOR_URL: http://otel-custom-collector:4318
+      TENANT_IDS: 481a6ae5-8e14-4899-80b3-d95feb5a3395
+      EPS: 100
+      BATCH_SIZE: 50
+    depends_on:
+      - otel-custom-collector
+
+  otel-custom-collector:
+    build:
+      context: ./apps/otel-custom-collector
+    container_name: otel-custom-collector
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
