@@ -16,10 +16,16 @@ processors:
 exporters:
   logging:
     verbosity: detailed
+  kafka:
+    protocol_version: 2.0.0
+    brokers:
+      - soc-kafka:9092
+    topic: soc-logs
+    encoding: otlp_json
 
 service:
   pipelines:
     logs:
       receivers: [otlp]
       processors: [soc_license_processor, batch]
-      exporters: [logging]
+      exporters: [logging, kafka]
