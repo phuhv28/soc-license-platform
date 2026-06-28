@@ -217,10 +217,10 @@ func (p *socLicenseProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) err
 		dropped := received - accepted
 
 		// Global counters
-		incrementWindowCounters(pipe, tenantID, "1m", window1m, received, accepted, dropped, 48*60*60)
-		incrementWindowCounters(pipe, tenantID, "5m", window5m, received, accepted, dropped, 7*24*60*60)
-		incrementWindowCounters(pipe, tenantID, "15m", window15m, received, accepted, dropped, 14*24*60*60)
-		incrementWindowCounters(pipe, tenantID, "1d", window1d, received, accepted, dropped, 90*24*60*60)
+		incrementWindowCounters(pipe, tenantID, "1m", window1m, received, accepted, dropped, 48*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "5m", window5m, received, accepted, dropped, 7*24*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "15m", window15m, received, accepted, dropped, 14*24*time.Hour)
+		incrementWindowCounters(pipe, tenantID, "1d", window1d, received, accepted, dropped, 90*24*time.Hour)
 
 		// Dimension Counters - Agent
 		for agent, rec := range agentReceived[tenantID] {
