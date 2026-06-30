@@ -48,6 +48,14 @@ export interface UsageDimensionResponse {
   droppedEps: number;
 }
 
+export interface PagedDimensionResponse {
+  items: UsageDimensionResponse[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export const usageApi = {
   getCurrent: (tenantId: string) =>
     client.get(`/api/v1/usage/${tenantId}/current`).then(r => r.data.data as UsageResponse),
@@ -55,6 +63,8 @@ export const usageApi = {
     client.get(`/api/v1/usage/${tenantId}/history?window=${window}&limit=${limit}`).then(r => r.data.data as UsageHistoryResponse),
   getSummary: () =>
     client.get('/api/v1/usage/summary').then(r => r.data.data as UsageSummaryResponse),
-  getTopDimensions: (tenantId: string, dimension: string, window = '5m', limit = 10) =>
+  getTopDimensions: (tenantId: string, dimension: string, window = '5m', limit = 500) =>
     client.get(`/api/v1/usage/${tenantId}/dimensions/top?dimension=${dimension}&window=${window}&limit=${limit}`).then(r => r.data.data as UsageDimensionResponse[]),
+  getDimensions: (tenantId: string, dimension: string, window = '5m', page = 1, pageSize = 20) =>
+    client.get(`/api/v1/usage/${tenantId}/dimensions?dimension=${dimension}&window=${window}&page=${page}&pageSize=${pageSize}`).then(r => r.data.data as PagedDimensionResponse),
 };

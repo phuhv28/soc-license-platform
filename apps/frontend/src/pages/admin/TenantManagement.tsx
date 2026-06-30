@@ -10,6 +10,7 @@ export default function TenantManagement() {
   const [name, setName] = useState('');
   const [notificationEmail, setNotificationEmail] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [username, setUsername] = useState('');
 
   const fetchTenants = async () => {
     try {
@@ -29,6 +30,7 @@ export default function TenantManagement() {
     setName(''); 
     setNotificationEmail('');
     setWebhookUrl('');
+    setUsername('');
     setShowModal(true); 
   };
   
@@ -46,7 +48,7 @@ export default function TenantManagement() {
       if (editTenant) {
         await tenantsApi.update(editTenant.tenantId, name, notificationEmail, webhookUrl);
       } else {
-        await tenantsApi.create(name, notificationEmail, webhookUrl);
+        await tenantsApi.create(name, notificationEmail, webhookUrl, username);
       }
       setShowModal(false);
       fetchTenants();
@@ -96,7 +98,7 @@ export default function TenantManagement() {
                 <tbody>
                   {tenants.map(t => (
                     <tr key={t.tenantId}>
-                      <td><Link to={`/tenant/${t.tenantId}`}>{t.name}</Link></td>
+                      <td><Link to={`/admin/tenants/${t.tenantId}`}>{t.name}</Link></td>
                       <td>
                         <span className={`badge ${t.status === 'ACTIVE' ? 'success' : 'neutral'}`}>
                           {t.status}
@@ -141,6 +143,12 @@ export default function TenantManagement() {
                 <label className="form-label">Webhook URL (Slack/Telegram)</label>
                 <input className="form-input" type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://... (optional)" />
               </div>
+              {!editTenant && (
+                <div className="form-group">
+                  <label className="form-label">Keycloak Username</label>
+                  <input className="form-input" value={username} onChange={e => setUsername(e.target.value)} placeholder="Leave blank to auto-generate" />
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>

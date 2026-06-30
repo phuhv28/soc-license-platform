@@ -26,15 +26,18 @@ public class TenantService {
     private final TenantRepository tenantRepository;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final KeycloakAdminService keycloakAdminService;
 
     public TenantService(
             TenantRepository tenantRepository,
             AuditLogService auditLogService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            KeycloakAdminService keycloakAdminService
     ) {
         this.tenantRepository = tenantRepository;
         this.auditLogService = auditLogService;
         this.objectMapper = objectMapper;
+        this.keycloakAdminService = keycloakAdminService;
     }
 
     @Transactional
@@ -44,6 +47,9 @@ public class TenantService {
         tenant.setWebhookUrl(request.webhookUrl());
         Tenant savedTenant = tenantRepository.saveAndFlush(tenant);
         TenantResponse response = TenantResponse.from(savedTenant);
+
+        // Auto-create Keycloak user for this tenant
+        keycloakAdminService.createTenantUser(savedTenant.getName(), savedTenant.getTenantId().toString(), request.username());
 
         auditLogService.writeAuditLog(
                 DEFAULT_ACTOR,

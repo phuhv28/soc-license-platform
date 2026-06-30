@@ -12,6 +12,9 @@ public record CreateTenantRequest(
         String notificationEmail,
         
         @Size(max = 1024, message = "Webhook URL must not exceed 1024 characters")
-        String webhookUrl
+        String webhookUrl,
+
+        @Size(max = 255, message = "Username must not exceed 255 characters")
+        String username
 ) {
 }

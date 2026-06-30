@@ -139,6 +139,28 @@ public class UsageController {
         return ApiResponse.success(topDimensions);
     }
 
+    /**
+     * Get paginated dimensions (agent, logsource) - true server-side pagination.
+     * Supports unlimited scale: only fetches exactly one page from Redis.
+     */
+    @GetMapping("/{tenantId}/dimensions")
+    public ApiResponse<com.vcs.management.usage.dto.PagedDimensionResponse> getDimensions(
+            @PathVariable UUID tenantId,
+            @RequestParam String dimension,
+            @RequestParam(defaultValue = "5m") String window,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize
+    ) {
+        findTenant(tenantId);
+        if (page < 1) page = 1;
+        if (pageSize < 1 || pageSize > 200) pageSize = 20;
+
+        com.vcs.management.usage.dto.PagedDimensionResponse result =
+                usageApiService.getPagedDimensions(tenantId, dimension, window, page, pageSize);
+
+        return ApiResponse.success(result);
+    }
+
     private Tenant findTenant(UUID tenantId) {
         return tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant not found"));

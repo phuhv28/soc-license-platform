@@ -10,6 +10,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d soc_license"]
       interval: 5s
@@ -68,6 +69,27 @@ services:
       redis:
         condition: service_healthy
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: soc-keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: postgres
+      KC_HTTP_PORT: 8180
+    ports:
+      - "8180:8180"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -88,7 +110,7 @@ services:
     deploy:
       replicas: 1
     environment:
-      TENANT_IDS: "481a6ae5-8e14-4899-80b3-d95feb5a3395"
+      TENANT_IDS: "146fcfa5-5ccb-4698-b02c-8b5c661a3c3e"
       EPS: "100"
       BATCH_SIZE: "50"
       COLLECTOR_URL: "http://haproxy:4318"

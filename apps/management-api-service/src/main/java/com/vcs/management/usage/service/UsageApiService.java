@@ -310,6 +310,85 @@ public class UsageApiService {
         return results;
     }
 
+    /**
+     * Get a paginated page of dimensions (agent, logsource) sorted by received count desc.
+     * Uses Redis ZCARD for total and ZREVRANGE with offset/limit for efficient paging.
+     */
+    public com.vcs.management.usage.dto.PagedDimensionResponse getPagedDimensions(
+            UUID tenantId, String dimension, String window, int page, int pageSize) {
+
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        String timeKey;
+        int windowSeconds;
+
+        if ("5m".equals(window)) {
+            timeKey = getFloorMinuteWindow(nowSeconds, 5);
+            windowSeconds = 300;
+        } else if ("15m".equals(window)) {
+            timeKey = getFloorMinuteWindow(nowSeconds, 15);
+            windowSeconds = 900;
+        } else {
+            timeKey = getMinuteWindow(nowSeconds);
+            windowSeconds = 60;
+        }
+
+        String receivedKey = String.format("top:%s:%s:received:%s:%s", tenantId, dimension, window, timeKey);
+        String acceptedKey = String.format("top:%s:%s:accepted:%s:%s", tenantId, dimension, window, timeKey);
+        String droppedKey  = String.format("top:%s:%s:dropped:%s:%s",  tenantId, dimension, window, timeKey);
+
+        // Get total count using ZCARD (O(1))
+        Long total = redisTemplate.opsForZSet().size(receivedKey);
+        if (total == null) total = 0L;
+
+        int totalPages = (int) Math.ceil((double) total / pageSize);
+        int offset = (page - 1) * pageSize;
+
+        // Fetch exactly one page with ZREVRANGE offset offset+pageSize-1 (O(log N + M))
+        java.util.Set<org.springframework.data.redis.core.ZSetOperations.TypedTuple<String>> tuples =
+                redisTemplate.opsForZSet().reverseRangeWithScores(receivedKey, offset, (long) offset + pageSize - 1);
+
+        if (tuples == null || tuples.isEmpty()) {
+            return new com.vcs.management.usage.dto.PagedDimensionResponse(
+                    java.util.Collections.emptyList(), total, page, pageSize, totalPages);
+        }
+
+        // Pipeline accepted + dropped lookups for this page
+        List<Object> pipelineResults = redisTemplate.executePipelined(
+                (org.springframework.data.redis.connection.RedisConnection connection) -> {
+            org.springframework.data.redis.serializer.RedisSerializer<String> serializer =
+                    (org.springframework.data.redis.serializer.RedisSerializer<String>) redisTemplate.getKeySerializer();
+            byte[] aKey = serializer.serialize(acceptedKey);
+            byte[] dKey = serializer.serialize(droppedKey);
+            for (org.springframework.data.redis.core.ZSetOperations.TypedTuple<String> tuple : tuples) {
+                byte[] item = serializer.serialize(tuple.getValue());
+                connection.zSetCommands().zScore(aKey, item);
+                connection.zSetCommands().zScore(dKey, item);
+            }
+            return null;
+        });
+
+        List<com.vcs.management.usage.dto.UsageDimensionResponse> items = new ArrayList<>();
+        int i = 0;
+        for (org.springframework.data.redis.core.ZSetOperations.TypedTuple<String> tuple : tuples) {
+            String name = tuple.getValue();
+            long receivedCount = tuple.getScore() != null ? tuple.getScore().longValue() : 0;
+            Double aScore = (Double) pipelineResults.get(i * 2);
+            Double dScore = (Double) pipelineResults.get(i * 2 + 1);
+            long acceptedCount = aScore != null ? aScore.longValue() : 0;
+            long droppedCount  = dScore != null ? dScore.longValue() : 0;
+
+            double rEps = Math.round(((double) receivedCount / windowSeconds) * 100.0) / 100.0;
+            double aEps = Math.round(((double) acceptedCount / windowSeconds) * 100.0) / 100.0;
+            double dEps = Math.round(((double) droppedCount  / windowSeconds) * 100.0) / 100.0;
+
+            items.add(new com.vcs.management.usage.dto.UsageDimensionResponse(
+                    name, receivedCount, acceptedCount, droppedCount, rEps, aEps, dEps));
+            i++;
+        }
+
+        return new com.vcs.management.usage.dto.PagedDimensionResponse(items, total, page, pageSize, totalPages);
+    }
+
     // ── Time Window Helpers ─────────────────────────────────────────────
 
     private String getMinuteWindow(long unixSeconds) {

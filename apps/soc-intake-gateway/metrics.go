@@ -154,9 +154,10 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 		}
 
 		quotaStr, _ := m.client.Get(ctx, "quota:"+tenantID).Result()
-		quota, _ := strconv.ParseInt(quotaStr, 10, 64)
-		if quota <= 0 {
-			quota = 100 // default fallback
+		quota, err := strconv.ParseInt(quotaStr, 10, 64)
+		if err != nil || quota <= 0 {
+			// No active license or quota is 0, reject all logs
+			return 0
 		}
 
 		nowFloat := float64(time.Now().UnixMilli()) / 1000.0

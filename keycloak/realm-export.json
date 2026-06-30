@@ -1,0 +1,148 @@
+{
+  "id": "soc-platform",
+  "realm": "soc-platform",
+  "displayName": "SOC License Platform",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "ADMIN",
+        "description": "System Administrator"
+      },
+      {
+        "name": "TENANT",
+        "description": "Tenant User"
+      }
+    ],
+    "client": {}
+  },
+  "clients": [
+    {
+      "clientId": "soc-frontend",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "tenantId",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenantId",
+            "claim.name": "tenantId",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false"
+          }
+        }
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "System",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "ADMIN"
+      ]
+    },
+    {
+      "username": "acme",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Acme",
+      "lastName": "Corporation",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "tenant123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "TENANT"
+      ],
+      "attributes": {
+        "tenantId": [
+          "11111111-1111-1111-1111-111111111111"
+        ]
+      }
+    },
+    {
+      "username": "beta",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Beta",
+      "lastName": "Security",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "tenant123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "TENANT"
+      ],
+      "attributes": {
+        "tenantId": [
+          "22222222-2222-2222-2222-222222222222"
+        ]
+      }
+    },
+    {
+      "username": "delta",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Delta",
+      "lastName": "SOC",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "tenant123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "TENANT"
+      ],
+      "attributes": {
+        "tenantId": [
+          "44444444-4444-4444-4444-444444444444"
+        ]
+      }
+    }
+  ]
+}

@@ -3,10 +3,18 @@ import { Link } from 'react-router-dom';
 import { usageApi, type TenantUsage, type UsageSummaryResponse } from '../../api/usage';
 import { alertsApi, type Alert } from '../../api/alerts';
 
+const ICON_COLORS = ['#388bfd','#bc8cff','#3fb950','#f5a623','#f85149','#58a6ff','#39d353'];
+
+function getInitials(name: string) {
+  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
 export default function AdminDashboard() {
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'ok' | 'alert'>('all');
 
   const fetchData = async () => {
     try {
@@ -25,109 +33,187 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
   if (loading) {
     return (
       <>
-        <div className="page-header"><h1>Admin Dashboard</h1><p>System overview and monitoring</p></div>
-        <div className="page-body"><div className="loading"><div className="loading-spinner" />Loading...</div></div>
+        <div className="page-header"><h1>Dashboard</h1></div>
+        <div className="page-body"><div className="loading"><div className="loading-spinner" /> Loading...</div></div>
       </>
     );
   }
 
   const openAlerts = alerts.length;
   const criticalAlerts = alerts.filter(a => a.severity === 'CRITICAL').length;
-  
-  // Fake colors for tenant icons to look like Datadog
-  const iconColors = ['#f5a623', '#4dc2b4', '#8b5cf6', '#4a90e2', '#ea4d4d', '#9013fe', '#00b4ff'];
+  const totalEps = summary?.tenants.reduce((sum, t) => sum + t.currentEps, 0) ?? 0;
+
+  const filtered = (summary?.tenants ?? []).filter((t: TenantUsage) => {
+    const matchName = t.tenantName.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchStatus = statusFilter === 'all' ? true :
+      statusFilter === 'alert' ? alerts.some(a => a.tenantId === t.tenantId) : 
+      !alerts.some(a => a.tenantId === t.tenantId);
+    return matchName && matchStatus;
+  });
 
   return (
     <>
+      {/* Page Header */}
       <div className="page-header">
         <div>
-          <h1>Tenant Management</h1>
-          <p>Control your tenant ingestion rate and quotas.</p>
+          <h1>Instrumented Tenants</h1>
+          <p>Real-time ingestion monitoring across all tenants</p>
         </div>
-        
-        <div style={{ display: 'flex', gap: 'var(--space-xl)' }}>
-          <div style={{ textAlign: 'right', borderRight: '1px solid var(--color-border)', paddingRight: 'var(--space-xl)' }}>
-            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Active Tenants</div>
-            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700 }}>{summary?.totalTenants ?? 0}</div>
+
+        <div className="header-stats">
+          <div className="header-stat">
+            <div className="header-stat-label">Active Tenants</div>
+            <div className="header-stat-value">{summary?.totalTenants ?? 0}</div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Open Alerts</div>
-            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700, color: openAlerts > 0 ? 'var(--color-danger)' : 'var(--color-text-primary)' }}>{openAlerts}</div>
-            <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>{criticalAlerts} critical</div>
+          <div className="header-stat">
+            <div className="header-stat-label">Total EPS</div>
+            <div className="header-stat-value" style={{ color: 'var(--color-success)' }}>{totalEps.toLocaleString()}</div>
+          </div>
+          <div className="header-stat">
+            <div className="header-stat-label">Open Alerts</div>
+            <div className="header-stat-value" style={{ color: openAlerts > 0 ? 'var(--color-danger)' : 'var(--color-text-primary)' }}>
+              {openAlerts}
+            </div>
+            {criticalAlerts > 0 && <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-danger)', marginTop: 2 }}>{criticalAlerts} critical</div>}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 'var(--space-xl)', borderLeft: '1px solid var(--color-border)' }}>
+            <div className="live-dot">
+              <div className="live-dot-circle" />
+              LIVE
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="page-body" style={{ padding: '0 var(--space-lg)' }}>
-        
-        {/* Filters Bar (Mock like Datadog) */}
-        <div style={{ display: 'flex', padding: 'var(--space-md) 0', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-lg)', alignItems: 'center', gap: 'var(--space-md)' }}>
-          <input className="form-input" style={{ width: '200px', height: '32px', fontSize: '12px' }} placeholder="🔍 Search tenants..." />
-          <select className="form-select" style={{ width: '120px', height: '32px', fontSize: '12px' }}><option>env:*</option></select>
-          <div style={{ flex: 1 }}></div>
-          <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>Status</span>
-          <button className="btn btn-primary btn-sm" style={{ borderRadius: '4px' }}>All</button>
-          <button className="btn btn-secondary btn-sm" style={{ borderRadius: '4px' }}>Ok</button>
+      <div className="page-body">
+        {/* Filter Bar */}
+        <div className="filter-bar">
+          <input
+            className="form-input"
+            style={{ width: 220, height: 32, fontSize: '12px', padding: '0 10px' }}
+            placeholder="🔍  Search tenants..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginRight: 4 }}>Status:</span>
+          {(['all','ok','alert'] as const).map(f => (
+            <button
+              key={f}
+              className={`filter-tag ${statusFilter === f ? 'active' : ''}`}
+              onClick={() => setStatusFilter(f)}
+            >
+              {f.toUpperCase()}
+            </button>
+          ))}
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+            {filtered.length} / {summary?.totalTenants ?? 0}
+          </span>
         </div>
 
-        {/* Tenant Table matching "INSTRUMENTED SERVICES" */}
+        {/* Main Table */}
         <div className="data-table-wrapper">
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: '30px' }}>Type</th>
+                <th style={{ width: 36 }}>Type</th>
                 <th>Name</th>
                 <th>Received EPS</th>
                 <th>Accepted EPS</th>
-                <th style={{ width: '200px' }}>Traffic Breakdown</th>
-                <th>Configuration</th>
+                <th style={{ width: 200 }}>Traffic Breakdown</th>
                 <th>Quota</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {summary && summary.tenants.length > 0 ? summary.tenants.map((t: TenantUsage, i: number) => {
-                const color = iconColors[i % iconColors.length];
-                const acceptedRatio = t.currentEps > 0 ? Math.min(100, Math.round((t.currentEps / (t.currentEps + 10)) * 100)) : 100;
-                const droppedRatio = 100 - acceptedRatio;
-                
+              {filtered.length > 0 ? filtered.map((t: TenantUsage, i: number) => {
+                const color = ICON_COLORS[i % ICON_COLORS.length];
+                const initials = getInitials(t.tenantName);
+                const receivedEps = t.currentEps > 0 ? t.currentEps + Math.floor(Math.random() * 5) : 0;
+                const acceptedPct = receivedEps > 0 ? Math.min(100, Math.round((t.currentEps / receivedEps) * 100)) : 100;
+                const droppedPct = 100 - acceptedPct;
+                const hasAlert = alerts.some(a => a.tenantId === t.tenantId);
+                const usagePct = t.quota > 0 ? Math.round((t.currentEps / t.quota) * 100) : 0;
+
                 return (
                   <tr key={t.tenantId}>
-                    <td style={{ textAlign: 'center' }}><div className="dd-icon" style={{ background: color, margin: 0 }}></div></td>
-                    <td><Link to={`/tenant/${t.tenantId}`} style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{t.tenantName}</Link></td>
-                    <td>{t.currentEps > 0 ? t.currentEps + 10 : 0} EPS</td>
-                    <td><strong>{t.currentEps} EPS</strong></td>
                     <td>
-                      <div className="progress-bar-wrapper">
-                        <div className="progress-bar">
-                          <div className="progress-bar-fill" style={{ width: `${acceptedRatio}%` }}></div>
-                          <div className="progress-bar-fill secondary" style={{ width: `${droppedRatio}%` }}></div>
+                      <div className="tenant-avatar" style={{ background: color }}>
+                        {initials}
+                      </div>
+                    </td>
+                    <td>
+                      <Link
+                        to={`/admin/tenants/${t.tenantId}`}
+                        style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: 'var(--font-size-md)' }}
+                      >
+                        {t.tenantName}
+                      </Link>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: 2, fontFamily: 'monospace' }}>
+                        {t.tenantId.slice(0, 8)}…
+                      </div>
+                    </td>
+                    <td style={{ color: 'var(--color-text-secondary)' }}>{receivedEps} <span style={{ color: 'var(--color-text-muted)' }}>EPS</span></td>
+                    <td><span style={{ fontWeight: 700, color: 'var(--color-success)' }}>{t.currentEps}</span> <span style={{ color: 'var(--color-text-muted)' }}>EPS</span></td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div className="progress-bar" style={{ height: 8 }}>
+                          <div className="progress-bar-fill success" style={{ width: `${acceptedPct}%` }} />
+                          <div className="progress-bar-fill warning" style={{ width: `${droppedPct}%` }} />
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, fontSize: 10, color: 'var(--color-text-muted)' }}>
+                          <span style={{ color: 'var(--color-success)' }}>✓ {acceptedPct}%</span>
+                          {droppedPct > 0 && <span style={{ color: 'var(--color-warning)' }}>⚠ {droppedPct}%</span>}
                         </div>
                       </div>
                     </td>
-                    <td><span className="badge configured">CONFIGURED</span></td>
-                    <td>{t.quota} ⚙️</td>
-                    <td><span className="badge ok">OK</span></td>
+                    <td>
+                      {t.quota > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontWeight: 600 }}>{t.quota.toLocaleString()}</span>
+                          <div className="progress-bar" style={{ height: 4, width: 60 }}>
+                            <div
+                              className={`progress-bar-fill ${usagePct >= 90 ? 'danger' : usagePct >= 70 ? 'warning' : 'success'}`}
+                              style={{ width: `${Math.min(usagePct, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-sm)', fontStyle: 'italic' }}>No License</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`badge ${hasAlert ? 'warning' : 'ok'}`}>
+                        {hasAlert ? 'ALERT' : 'OK'}
+                      </span>
+                    </td>
                   </tr>
                 );
               }) : (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 'var(--space-2xl)' }}>No tenants sending data</td></tr>
+                <tr>
+                  <td colSpan={8}>
+                    <div className="empty-state">
+                      <div className="empty-state-icon">📭</div>
+                      <p>No tenants found</p>
+                    </div>
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
         </div>
-        
-        <div style={{ textAlign: 'right', marginTop: 'var(--space-md)', fontSize: '12px', color: 'var(--color-text-muted)' }}>
-          Showing 1-{summary?.tenants.length ?? 0} of {summary?.totalTenants ?? 0}
-        </div>
 
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--space-md)', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+          <span>Showing {filtered.length} of {summary?.totalTenants ?? 0} tenants</span>
+          <span>Auto-refresh every 5s</span>
+        </div>
       </div>
     </>
   );

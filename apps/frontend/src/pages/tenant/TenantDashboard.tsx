@@ -1,39 +1,333 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { usageApi, type UsageResponse, type UsageHistoryResponse } from '../../api/usage';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend
+} from 'recharts';
+import {
+  usageApi,
+  type UsageResponse,
+  type UsageHistoryResponse,
+  type UsageDimensionResponse,
+  type PagedDimensionResponse,
+} from '../../api/usage';
 import { licensesApi, type License } from '../../api/licenses';
 import { alertsApi, type Alert } from '../../api/alerts';
 import { reportsApi } from '../../api/reports';
 
+const WINDOW_OPTIONS = [
+  { value: '1m',  label: '1 Min' },
+  { value: '5m',  label: '5 Min' },
+  { value: '15m', label: '15 Min' },
+  { value: '1d',  label: '1 Day' },
+];
+
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const SOURCE_COLORS = ['#388bfd','#bc8cff','#3fb950','#f5a623','#f85149','#58a6ff','#39d353','#fb923c','#a78bfa','#34d399'];
+const AGENT_COLORS  = ['#3fb950','#bc8cff','#388bfd','#f5a623','#f85149','#39d353','#58a6ff','#fb923c','#34d399','#a78bfa'];
+
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{
+      background: 'var(--color-bg-elevated)',
+      border: '1px solid var(--color-border)',
+      borderRadius: 'var(--radius-md)',
+      padding: '10px 14px',
+      boxShadow: 'var(--shadow-lg)',
+      fontSize: 12,
+    }}>
+      <div style={{ color: 'var(--color-text-muted)', marginBottom: 6, fontSize: 11 }}>{label}</div>
+      {payload.map((entry: any) => (
+        <div key={entry.dataKey} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+          <div style={{ width: 8, height: 8, borderRadius: 2, background: entry.color, flexShrink: 0 }} />
+          <span style={{ color: 'var(--color-text-secondary)', textTransform: 'capitalize' }}>{entry.dataKey}:</span>
+          <span style={{ color: 'var(--color-text-primary)', fontWeight: 600 }}>{entry.value?.toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Server-side Paged Dimension Table ────────────────────────────────
+
+interface DimensionTableProps {
+  title: string;
+  tenantId: string;
+  dimension: string;
+  window: string;
+  colors: string[];
+}
+
+function DimensionTable({ title, tenantId, dimension, window: win, colors }: DimensionTableProps) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [search, setSearch] = useState('');
+  const [data, setData] = useState<PagedDimensionResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sortKey, setSortKey] = useState<keyof UsageDimensionResponse>('receivedEps');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // Fetch from server whenever page/pageSize/window changes
+  const fetchPage = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await usageApi.getDimensions(tenantId, dimension, win, page, pageSize);
+      setData(result);
+    } catch {
+      // Silently ignore on interval refresh errors
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, dimension, win, page, pageSize]);
+
+  useEffect(() => {
+    fetchPage();
+    const interval = setInterval(fetchPage, 5000);
+    return () => clearInterval(interval);
+  }, [fetchPage]);
+
+  // Reset to page 1 when window changes
+  useEffect(() => { setPage(1); }, [win]);
+
+  // Client-side filter + sort within the current page
+  // (searching across all pages would require an additional server-side full-text index,
+  //  which Redis ZSet doesn't support natively – so we note this limitation clearly)
+  const items = useMemo(() => {
+    if (!data?.items) return [];
+    let rows = data.items.filter(d =>
+      search ? d.name.toLowerCase().includes(search.toLowerCase()) : true
+    );
+    rows = [...rows].sort((a, b) => {
+      const aVal = a[sortKey] as number | string;
+      const bVal = b[sortKey] as number | string;
+      if (typeof aVal === 'string') {
+        return sortDir === 'asc' ? (aVal as string).localeCompare(bVal as string)
+                                 : (bVal as string).localeCompare(aVal as string);
+      }
+      return sortDir === 'asc' ? (aVal as number) - (bVal as number)
+                               : (bVal as number) - (aVal as number);
+    });
+    return rows;
+  }, [data, search, sortKey, sortDir]);
+
+  const handleSort = (key: keyof UsageDimensionResponse) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const SortIcon = ({ col }: { col: keyof UsageDimensionResponse }) =>
+    sortKey !== col
+      ? <span style={{ color: 'var(--color-text-muted)', marginLeft: 3 }}>⇅</span>
+      : <span style={{ color: 'var(--color-accent)', marginLeft: 3 }}>{sortDir === 'asc' ? '↑' : '↓'}</span>;
+
+  const totalPages = data?.totalPages ?? 1;
+  const total = data?.total ?? 0;
+
+  return (
+    <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
+      {/* Header */}
+      <div className="card-header">
+        <h3>{title}</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+          <input
+            className="form-input"
+            style={{ width: 190, height: 28, padding: '0 8px', fontSize: 11 }}
+            placeholder="🔍  Filter current page..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <select
+            className="form-select"
+            style={{ width: 'auto', height: 28, fontSize: 11, padding: '0 24px 0 8px' }}
+            value={pageSize}
+            onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+          >
+            {PAGE_SIZE_OPTIONS.map(n => (
+              <option key={n} value={n}>{n} / page</option>
+            ))}
+          </select>
+          <span className="badge neutral" style={{ whiteSpace: 'nowrap' }}>
+            {total.toLocaleString()} total
+          </span>
+          {loading && <div className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="card-body" style={{ padding: 0 }}>
+        {total > 0 ? (
+          <>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 50 }}>
+                      Rank
+                    </th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('name')}>
+                      Name <SortIcon col="name" />
+                    </th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('receivedEps')}>
+                      Received EPS <SortIcon col="receivedEps" />
+                    </th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('acceptedEps')}>
+                      Accepted EPS <SortIcon col="acceptedEps" />
+                    </th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('droppedEps')}>
+                      Dropped EPS <SortIcon col="droppedEps" />
+                    </th>
+                    <th style={{ width: 180 }}>Traffic</th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('receivedCount')}>
+                      Volume (total) <SortIcon col="receivedCount" />
+                    </th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length > 0 ? items.map((item, i) => {
+                    const rank = (page - 1) * pageSize + i + 1;
+                    const total = item.receivedEps || 1;
+                    const acceptedPct = (item.acceptedEps / total) * 100;
+                    const droppedPct  = (item.droppedEps  / total) * 100;
+                    const hasDropped  = item.droppedEps > 0;
+                    const color = colors[(rank - 1) % colors.length];
+
+                    return (
+                      <tr key={item.name}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{
+                              width: 10, height: 10, borderRadius: 2,
+                              background: color, flexShrink: 0,
+                            }} />
+                            <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>#{rank}</span>
+                          </div>
+                        </td>
+                        <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 12 }}>
+                          {item.name}
+                        </td>
+                        <td style={{ color: 'var(--color-text-secondary)' }}>
+                          {item.receivedEps} <span style={{ color: 'var(--color-text-muted)' }}>/s</span>
+                        </td>
+                        <td style={{ fontWeight: 600, color: 'var(--color-success)' }}>
+                          {item.acceptedEps} <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>/s</span>
+                        </td>
+                        <td style={{ color: hasDropped ? 'var(--color-warning)' : 'var(--color-text-muted)' }}>
+                          {hasDropped
+                            ? <>{item.droppedEps} <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>/s</span></>
+                            : '—'}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            <div className="progress-bar" style={{ height: 6 }}>
+                              <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
+                              {droppedPct > 0 && <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, fontSize: 10, color: 'var(--color-text-muted)' }}>
+                              <span style={{ color: 'var(--color-success)' }}>✓ {Math.round(acceptedPct)}%</span>
+                              {hasDropped && <span style={{ color: 'var(--color-warning)' }}>⚠ {Math.round(droppedPct)}%</span>}
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                          {item.receivedCount.toLocaleString()}
+                        </td>
+                        <td>
+                          <span className={`badge ${hasDropped ? 'warning' : 'ok'}`}>
+                            {hasDropped ? 'PARTIAL' : 'OK'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  }) : (
+                    <tr>
+                      <td colSpan={8}>
+                        <div className="empty-state"><p>No results for "{search}" on this page</p></div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination footer */}
+            {totalPages > 1 && (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: 'var(--space-base) var(--space-lg)',
+                borderTop: '1px solid var(--color-border)',
+                fontSize: 'var(--font-size-xs)',
+                color: 'var(--color-text-muted)',
+              }}>
+                <span>
+                  Page <strong style={{ color: 'var(--color-text-primary)' }}>{page}</strong> of{' '}
+                  <strong style={{ color: 'var(--color-text-primary)' }}>{totalPages}</strong>
+                  {' '}·{' '}
+                  <strong style={{ color: 'var(--color-text-primary)' }}>{data?.total.toLocaleString()}</strong> records total
+                </span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(1)}>«</button>
+                  <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                    .reduce<(number | '...')[]>((acc, p, idx, arr) => {
+                      if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push('...');
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((p, idx) =>
+                      p === '...'
+                        ? <span key={`ell-${idx}`} style={{ padding: '3px 6px', color: 'var(--color-text-muted)' }}>…</span>
+                        : <button
+                            key={p}
+                            className={`btn btn-sm ${page === p ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setPage(p as number)}
+                          >{p}</button>
+                    )}
+
+                  <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+                  <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(totalPages)}>»</button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-state-icon">📭</div>
+            <p>No data yet for this window</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────
+
 export default function TenantDashboard() {
   const { tenantId } = useParams<{ tenantId: string }>();
-  const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const [usage, setUsage]     = useState<UsageResponse | null>(null);
   const [history, setHistory] = useState<UsageHistoryResponse | null>(null);
   const [licenses, setLicenses] = useState<License[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [topAgents, setTopAgents] = useState<any[]>([]);
-  const [topLogSources, setTopLogSources] = useState<any[]>([]);
+  const [alerts, setAlerts]   = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [historyWindow, setHistoryWindow] = useState('1m');
 
   const fetchData = async () => {
     if (!tenantId) return;
     try {
-      const [usageData, historyData, licensesData, alertsData, agentsData, logSourcesData] = await Promise.all([
+      const [usageData, historyData, licensesData, alertsData] = await Promise.all([
         usageApi.getCurrent(tenantId),
         usageApi.getHistory(tenantId, historyWindow, 60),
         licensesApi.getByTenant(tenantId),
         alertsApi.getAll({ tenantId, status: 'OPEN' }),
-        usageApi.getTopDimensions(tenantId, 'agent', historyWindow, 5),
-        usageApi.getTopDimensions(tenantId, 'logsource', historyWindow, 5),
       ]);
       setUsage(usageData);
       setHistory(historyData);
       setLicenses(licensesData);
       setAlerts(alertsData);
-      setTopAgents(agentsData);
-      setTopLogSources(logSourcesData);
     } catch (err) {
       console.error('Failed to load tenant dashboard:', err);
     } finally {
@@ -60,147 +354,169 @@ export default function TenantDashboard() {
     return (
       <>
         <div className="page-header"><h1>Tenant Dashboard</h1></div>
-        <div className="page-body"><div className="loading"><div className="loading-spinner" />Loading...</div></div>
+        <div className="page-body"><div className="loading"><div className="loading-spinner" /> Loading...</div></div>
       </>
     );
   }
 
-  // Downsample history for chart (show every 5th point to keep chart readable, unless it's 1d where we only have few points)
   const chartData = history?.dataPoints
-    ? history.dataPoints.filter((_, i) => historyWindow === '1d' ? true : i % 5 === 0).map(dp => ({
-        time: dp.timestamp.split('T')[1] || dp.timestamp,
-        received: dp.received,
-        accepted: dp.accepted,
-        dropped: dp.dropped,
-      }))
+    ? history.dataPoints
+        .filter((_, i) => historyWindow === '1d' ? true : i % 3 === 0)
+        .map(dp => ({
+          time: dp.timestamp.includes('T') ? dp.timestamp.split('T')[1].slice(0, 5) : dp.timestamp,
+          received: dp.received,
+          accepted: dp.accepted,
+          dropped: dp.dropped,
+        }))
     : [];
 
-  const usageColor = (usage?.usagePercent ?? 0) >= 100 ? 'danger'
-    : (usage?.usagePercent ?? 0) >= 70 ? 'warning' : 'success';
+  const usagePct    = usage?.usagePercent ?? 0;
+  const usageStatus = usagePct >= 100 ? 'danger' : usagePct >= 70 ? 'warning' : 'success';
 
   return (
     <>
       <div className="page-header">
-        <h1>{usage?.tenantName || 'Tenant'} Dashboard</h1>
-        <p>Real-time EPS monitoring and usage analytics</p>
+        <div>
+          <h1>{usage?.tenantName || 'Tenant'} Dashboard</h1>
+          <p>Real-time EPS monitoring and usage analytics</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-base)' }}>
+          <div className="live-dot"><div className="live-dot-circle" />LIVE</div>
+          <button className="btn btn-secondary btn-sm" onClick={handleExportCsv}>📥 Export CSV</button>
+        </div>
       </div>
+
       <div className="page-body">
-        {/* Stat Cards */}
+
+        {/* KPI Cards */}
         <div className="stat-cards">
-          <div className="stat-card">
+          <div className={`stat-card ${usageStatus}`}>
             <div className="stat-card-label">Current EPS</div>
-            <div className={`stat-card-value ${usageColor}`}>{usage?.currentEps ?? 0}</div>
+            <div className={`stat-card-value ${usageStatus}`}>{(usage?.currentEps ?? 0).toLocaleString()}</div>
             <div className="stat-card-sub">events / second</div>
           </div>
-          <div className="stat-card">
-            <div className="stat-card-label">Quota</div>
-            <div className="stat-card-value">{usage?.quota ?? 0}</div>
-            <div className="stat-card-sub">EPS limit</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-card-label">Usage</div>
-            <div className={`stat-card-value ${usageColor}`}>{usage?.usagePercent ?? 0}%</div>
+          <div className="stat-card info">
+            <div className="stat-card-label">EPS Quota</div>
+            <div className="stat-card-value info" style={{ fontSize: usage?.quota ? undefined : '1.5rem' }}>
+              {usage?.quota ? usage.quota.toLocaleString() : 'No License'}
+            </div>
             <div className="stat-card-sub">
-              <div className="progress-bar" style={{ marginTop: 8 }}>
-                <div
-                  className={`progress-bar-fill ${usageColor}`}
-                  style={{ width: `${Math.min(usage?.usagePercent ?? 0, 100)}%` }}
-                />
+              {usage?.quota ? 'max events / second' : 'Active license required'}
+            </div>
+          </div>
+          <div className={`stat-card ${usage?.quota ? usageStatus : 'info'}`}>
+            <div className="stat-card-label">Quota Usage</div>
+            <div className={`stat-card-value ${usage?.quota ? usageStatus : 'info'}`}>
+              {usage?.quota ? `${usagePct}%` : 'N/A'}
+            </div>
+            <div className="stat-card-sub" style={{ marginTop: 6 }}>
+              <div className="progress-bar" style={{ height: 4 }}>
+                <div className={`progress-bar-fill ${usage?.quota ? usageStatus : 'info'}`} style={{ width: usage?.quota ? `${Math.min(usagePct, 100)}%` : '0%' }} />
               </div>
             </div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card success">
+            <div className="stat-card-label">Accepted Today</div>
+            <div className="stat-card-value success">{(usage?.acceptedToday ?? 0).toLocaleString()}</div>
+            <div className="stat-card-sub">events accepted</div>
+          </div>
+          <div className="stat-card danger">
             <div className="stat-card-label">Dropped Today</div>
-            <div className="stat-card-value danger">{usage?.droppedToday ?? 0}</div>
+            <div className="stat-card-value danger">{(usage?.droppedToday ?? 0).toLocaleString()}</div>
             <div className="stat-card-sub">events dropped</div>
           </div>
         </div>
 
         {/* Chart */}
-        <div className="card" style={{ marginBottom: 'var(--space-base)' }}>
+        <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
           <div className="card-header">
-            <h3>EPS History ({historyWindow})</h3>
-            <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-              <select className="form-input" style={{ width: 'auto', padding: 'var(--space-xs) var(--space-sm)', fontSize: '0.875rem' }} value={historyWindow} onChange={e => setHistoryWindow(e.target.value)}>
-                <option value="1m">1 Minute</option>
-                <option value="5m">5 Minutes</option>
-                <option value="15m">15 Minutes</option>
-                <option value="1d">1 Day</option>
-              </select>
-              <button className="btn btn-secondary btn-sm" onClick={handleExportCsv}>📥 Export CSV</button>
+            <h3>EPS Timeline</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+              {WINDOW_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  className={`filter-tag ${historyWindow === opt.value ? 'active' : ''}`}
+                  onClick={() => setHistoryWindow(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="card-body">
             <div className="chart-container">
               {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={280}>
                   <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <defs>
-                      <linearGradient id="colorReceived" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--color-chart-received)" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="var(--color-chart-received)" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="colorAccepted" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--color-chart-accepted)" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="var(--color-chart-accepted)" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="colorDropped" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--color-chart-dropped)" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="var(--color-chart-dropped)" stopOpacity={0}/>
-                      </linearGradient>
+                      {[
+                        { id: 'received', color: 'var(--color-chart-received)' },
+                        { id: 'accepted', color: 'var(--color-chart-accepted)' },
+                        { id: 'dropped',  color: 'var(--color-chart-dropped)' },
+                      ].map(g => (
+                        <linearGradient key={g.id} id={`grad-${g.id}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor={g.color} stopOpacity={0.25} />
+                          <stop offset="100%" stopColor={g.color} stopOpacity={0.02} />
+                        </linearGradient>
+                      ))}
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-                    <XAxis dataKey="time" stroke="var(--color-text-muted)" fontSize={11} interval="preserveStartEnd" tickLine={false} axisLine={false} />
-                    <YAxis stroke="var(--color-text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                    <Tooltip
-                      contentStyle={{
-                        background: 'var(--color-bg-card)',
-                        border: '1px solid var(--color-border)',
-                        borderRadius: 'var(--radius-sm)',
-                        color: 'var(--color-text-primary)',
-                        fontSize: '12px',
-                        boxShadow: 'var(--shadow-md)'
-                      }}
-                      itemStyle={{ padding: 0 }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
-                    <Area type="monotone" dataKey="received" stroke="var(--color-chart-received)" fill="url(#colorReceived)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
-                    <Area type="monotone" dataKey="accepted" stroke="var(--color-chart-accepted)" fill="url(#colorAccepted)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
-                    <Area type="monotone" dataKey="dropped" stroke="var(--color-chart-dropped)" fill="url(#colorDropped)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+                    <XAxis dataKey="time" stroke="var(--color-text-muted)" fontSize={10} interval="preserveStartEnd" tickLine={false} axisLine={false} />
+                    <YAxis stroke="var(--color-text-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 12 }} iconType="square" iconSize={8} />
+                    <Area type="monotone" dataKey="received" name="received" stroke="var(--color-chart-received)" fill="url(#grad-received)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+                    <Area type="monotone" dataKey="accepted" name="accepted" stroke="var(--color-chart-accepted)" fill="url(#grad-accepted)" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+                    <Area type="monotone" dataKey="dropped"  name="dropped"  stroke="var(--color-chart-dropped)"  fill="url(#grad-dropped)"  strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="empty-state"><p>No history data yet</p></div>
+                <div className="empty-state"><div className="empty-state-icon">📊</div><p>No history data yet</p></div>
               )}
             </div>
           </div>
         </div>
 
-        <div className="grid-2">
-          {/* License Info */}
+        {/* License Info + Alerts */}
+        <div className="grid-2" style={{ marginBottom: 'var(--space-lg)' }}>
           <div className="card">
-            <div className="card-header"><h3>License Info</h3></div>
+            <div className="card-header"><h3>License</h3></div>
             <div className="card-body">
               {activeLicense ? (
-                <div className="data-table-wrapper">
-                  <table className="data-table">
-                    <tbody>
-                      <tr><td style={{ color: 'var(--color-text-muted)', width: '120px' }}>EPS Quota</td><td><strong>{activeLicense.epsQuota.toLocaleString()}</strong></td></tr>
-                      <tr><td style={{ color: 'var(--color-text-muted)' }}>Start Date</td><td>{activeLicense.startDate}</td></tr>
-                      <tr><td style={{ color: 'var(--color-text-muted)' }}>End Date</td><td>{activeLicense.endDate}</td></tr>
-                      <tr><td style={{ color: 'var(--color-text-muted)' }}>Status</td><td><span className="badge success">{activeLicense.status}</span></td></tr>
-                    </tbody>
-                  </table>
-                </div>
+                <>
+                  <div className="info-row">
+                    <span className="info-row-label">EPS Quota</span>
+                    <span className="info-row-value" style={{ fontWeight: 700, color: 'var(--color-accent)' }}>
+                      {activeLicense.epsQuota.toLocaleString()} EPS
+                    </span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-row-label">Start Date</span>
+                    <span className="info-row-value">{activeLicense.startDate}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-row-label">End Date</span>
+                    <span className="info-row-value">{activeLicense.endDate}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-row-label">Status</span>
+                    <span className="info-row-value"><span className="badge success">{activeLicense.status}</span></span>
+                  </div>
+                </>
               ) : (
-                <div className="empty-state"><p>No active license</p></div>
+                <div className="empty-state"><div className="empty-state-icon">🔑</div><p>No active license</p></div>
               )}
             </div>
           </div>
 
-          {/* Alerts */}
           <div className="card">
-            <div className="card-header"><h3>Open Alerts ({alerts.length})</h3></div>
+            <div className="card-header">
+              <h3>Open Alerts</h3>
+              <span className="badge" style={{
+                background: alerts.length > 0 ? 'var(--color-danger-bg)' : 'var(--color-success-bg)',
+                color: alerts.length > 0 ? 'var(--color-danger)' : 'var(--color-success)',
+              }}>{alerts.length}</span>
+            </div>
             <div className="card-body" style={{ padding: 0 }}>
               {alerts.length > 0 ? (
                 alerts.map(alert => (
@@ -217,140 +533,32 @@ export default function TenantDashboard() {
                   </div>
                 ))
               ) : (
-                <div className="empty-state"><p>No open alerts ✅</p></div>
+                <div className="empty-state"><div className="empty-state-icon">✅</div><p>No open alerts</p></div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Today's Stats */}
-        <div className="card" style={{ marginTop: 'var(--space-base)' }}>
-          <div className="card-header"><h3>Today's Statistics</h3></div>
-          <div className="card-body">
-            <div className="stat-cards" style={{ marginBottom: 0 }}>
-              <div className="stat-card">
-                <div className="stat-card-label">Received</div>
-                <div className="stat-card-value">{usage?.receivedToday?.toLocaleString() ?? 0}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-card-label">Accepted</div>
-                <div className="stat-card-value success">{usage?.acceptedToday?.toLocaleString() ?? 0}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-card-label">Dropped</div>
-                <div className="stat-card-value danger">{usage?.droppedToday?.toLocaleString() ?? 0}</div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Full server-side paginated dimension tables */}
+        {tenantId && (
+          <>
+            <DimensionTable
+              title={`Log Sources · ${historyWindow}`}
+              tenantId={tenantId}
+              dimension="logsource"
+              window={historyWindow}
+              colors={SOURCE_COLORS}
+            />
+            <DimensionTable
+              title={`Agents · ${historyWindow}`}
+              tenantId={tenantId}
+              dimension="agent"
+              window={historyWindow}
+              colors={AGENT_COLORS}
+            />
+          </>
+        )}
 
-        {/* Top Dimensions */}
-        {/* Top Dimensions */}
-        <div className="card" style={{ marginTop: 'var(--space-base)' }}>
-          <div className="card-header">
-            <h3 style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.5px' }}>INSTRUMENTED LOG SOURCES ({historyWindow})</h3>
-          </div>
-          <div className="card-body" style={{ padding: 0 }}>
-            {topLogSources.length > 0 ? (
-              <div className="data-table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '40px' }}>TYPE</th>
-                      <th>NAME</th>
-                      <th>RECEIVED EPS</th>
-                      <th>ACCEPTED EPS</th>
-                      <th style={{ width: '200px' }}>TRAFFIC BREAKDOWN</th>
-                      <th>INFRA.</th>
-                      <th>STATUS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topLogSources.map((source, i) => {
-                      const total = source.receivedEps || 1;
-                      const acceptedPct = (source.acceptedEps / total) * 100;
-                      const droppedPct = (source.droppedEps / total) * 100;
-                      const colors = ['#f4a261', '#e76f51', '#2a9d8f', '#e9c46a', '#264653', '#8ab17d'];
-                      const iconColor = colors[i % colors.length];
-
-                      return (
-                        <tr key={i}>
-                          <td><div className="tenant-icon" style={{ backgroundColor: iconColor }} /></td>
-                          <td style={{ fontWeight: 600 }}>{source.name}</td>
-                          <td>{source.receivedEps} /s</td>
-                          <td>{source.acceptedEps} /s</td>
-                          <td>
-                            <div className="progress-bar">
-                              <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
-                              <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />
-                            </div>
-                          </td>
-                          <td>{source.receivedCount.toLocaleString()} <span style={{ color: 'var(--color-text-muted)' }}>⬡</span></td>
-                          <td><span className="badge success">OK</span></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="empty-state"><p>No log source data</p></div>
-            )}
-          </div>
-        </div>
-
-        <div className="card" style={{ marginTop: 'var(--space-base)' }}>
-          <div className="card-header">
-            <h3 style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.5px' }}>INSTRUMENTED AGENTS ({historyWindow})</h3>
-          </div>
-          <div className="card-body" style={{ padding: 0 }}>
-            {topAgents.length > 0 ? (
-              <div className="data-table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '40px' }}>TYPE</th>
-                      <th>NAME</th>
-                      <th>RECEIVED EPS</th>
-                      <th>ACCEPTED EPS</th>
-                      <th style={{ width: '200px' }}>TRAFFIC BREAKDOWN</th>
-                      <th>INFRA.</th>
-                      <th>STATUS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topAgents.map((agent, i) => {
-                      const total = agent.receivedEps || 1;
-                      const acceptedPct = (agent.acceptedEps / total) * 100;
-                      const droppedPct = (agent.droppedEps / total) * 100;
-                      const colors = ['#2a9d8f', '#e9c46a', '#264653', '#f4a261', '#e76f51', '#8ab17d'];
-                      const iconColor = colors[i % colors.length];
-
-                      return (
-                        <tr key={i}>
-                          <td><div className="tenant-icon" style={{ backgroundColor: iconColor }} /></td>
-                          <td style={{ fontWeight: 600 }}>{agent.name}</td>
-                          <td>{agent.receivedEps} /s</td>
-                          <td>{agent.acceptedEps} /s</td>
-                          <td>
-                            <div className="progress-bar">
-                              <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
-                              <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />
-                            </div>
-                          </td>
-                          <td>{agent.receivedCount.toLocaleString()} <span style={{ color: 'var(--color-text-muted)' }}>⬡</span></td>
-                          <td><span className="badge success">OK</span></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="empty-state"><p>No agent data</p></div>
-            )}
-          </div>
-        </div>
       </div>
     </>
   );
