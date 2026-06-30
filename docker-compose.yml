@@ -82,15 +82,16 @@ services:
       - management-api-service
 
 
-  event-producer-otel:
+  event-producer:
     build:
-      context: ./apps/event-producer-otel
-    container_name: event-producer-otel
+      context: ./apps/event-producer
+    deploy:
+      replicas: 1
     environment:
-      COLLECTOR_URL: http://haproxy:4318
-      TENANT_IDS: 481a6ae5-8e14-4899-80b3-d95feb5a3395
-      EPS: 100
-      BATCH_SIZE: 50
+      TENANT_IDS: "481a6ae5-8e14-4899-80b3-d95feb5a3395"
+      EPS: "100"
+      BATCH_SIZE: "50"
+      COLLECTOR_URL: "http://haproxy:4318"
     depends_on:
       - haproxy
 

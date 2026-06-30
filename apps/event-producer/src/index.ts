@@ -123,7 +123,7 @@ async function sendBatch(tenantId: string): Promise<void> {
 // ── Stats Reporter ──────────────────────────────────────────────────────
 
 function reportStats(): void {
-  console.log("\n═══ OTLP Event Producer Stats ═══");
+  console.log("\n═══ Flat JSON Event Producer Stats ═══");
   for (const tid of tenantIds) {
     const s = stats[tid];
     console.log(
@@ -136,7 +136,7 @@ function reportStats(): void {
 // ── Main ────────────────────────────────────────────────────────────────
 
 console.log("╔══════════════════════════════════════════╗");
-console.log("║      SOC OTLP Event Producer Started     ║");
+console.log("║    SOC Flat JSON Event Producer Started  ║");
 console.log("╚══════════════════════════════════════════╝");
 console.log("Config:", {
   tenantIds,

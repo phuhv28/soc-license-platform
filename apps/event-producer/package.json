@@ -1,7 +1,7 @@
 {
-  "name": "event-producer-otel",
+  "name": "event-producer",
   "version": "1.0.0",
-  "description": "OpenTelemetry OTLP Event Producer",
+  "description": "SOC Event Producer",
   "main": "dist/index.js",
   "scripts": {
     "start": "node dist/index.js",
