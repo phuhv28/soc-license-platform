@@ -11,7 +11,7 @@ const tenantIds = (process.env.TENANT_IDS || process.env.TENANT_ID || "tenant-a"
 const eps = Number(process.env.EPS || 100);
 const batchSize = Number(process.env.BATCH_SIZE || 50);
 const collectorUrl = process.env.COLLECTOR_URL || "http://localhost:4318";
-const batchEndpoint = `${collectorUrl}/v1/logs`;
+const batchEndpoint = `${collectorUrl}/api/v1/logs`;
 
 // Calculate interval: send batchSize events per interval to achieve target EPS
 // interval = (batchSize / eps) * 1000 ms
@@ -55,12 +55,11 @@ function rand(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function generateOtlpBatch(tenantId: string, size: number) {
-  const scopeLogs = [];
+function generateFlatBatch(size: number) {
+  const events = [];
   
   for (let i = 0; i < size; i++) {
     const eventType = EVENT_TYPES[Math.floor(Math.random() * EVENT_TYPES.length)];
-    const agent = `agent-${rand(1, 5)}`;
     
     const payload = {
       sourceIp: `10.${rand(0, 255)}.${rand(0, 255)}.${rand(1, 254)}`,
@@ -71,82 +70,39 @@ function generateOtlpBatch(tenantId: string, size: number) {
       message: `Event from ${eventType}`,
     };
 
-    const timeUnixNano = (Date.now() * 1000000).toString();
-
-    scopeLogs.push({
-      scope: {
-        name: "soc.event.producer",
-      },
-      logRecords: [
-        {
-          timeUnixNano,
-          observedTimeUnixNano: timeUnixNano,
-          severityText: "INFO",
-          body: {
-            stringValue: JSON.stringify(payload)
-          },
-          attributes: [
-            {
-              key: "log.source",
-              value: { stringValue: eventType }
-            },
-            {
-              key: "event.id",
-              value: { stringValue: uuidv4() }
-            }
-          ]
-        }
-      ]
+    events.push({
+      "log.source": eventType,
+      "event.id": uuidv4(),
+      "timestamp": new Date().toISOString(),
+      ...payload
     });
   }
 
-  // To simulate different agents, we should ideally group by agent.
-  // For simplicity, we just put them in one resource log with a random agent name,
-  // or we assign a single agent for the whole batch. Let's do a single agent per batch for easier grouping.
-  const batchAgent = `agent-${rand(1, 5)}`;
-
-  return {
-    resourceLogs: [
-      {
-        resource: {
-          attributes: [
-            {
-              key: "tenant.id",
-              value: { stringValue: tenantId }
-            },
-            {
-              key: "agent.name",
-              value: { stringValue: batchAgent }
-            }
-          ]
-        },
-        scopeLogs: scopeLogs
-      }
-    ]
-  };
+  return events;
 }
 
 // ── Batch Sender ────────────────────────────────────────────────────────
 
 async function sendBatch(tenantId: string): Promise<void> {
-  const batch = generateOtlpBatch(tenantId, batchSize);
+  const batch = generateFlatBatch(batchSize);
   const tenantStat = stats[tenantId];
+  const batchAgent = `agent-${rand(1, 5)}`;
 
   try {
     const response = await axios.post(batchEndpoint, batch, {
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "X-Tenant-ID": tenantId,
+        "X-Agent-Name": batchAgent
+      },
       timeout: 5000,
     });
 
-    const data = response.data;
+    // Custom Intake Server returns 202 Accepted.
+    // For simplicity, we log sent.
     const sent = batchSize;
+    let accepted = sent;
     let dropped = 0;
-
-    if (data && data.partialSuccess && data.partialSuccess.rejectedLogRecords) {
-      dropped = data.partialSuccess.rejectedLogRecords;
-    }
-
-    const accepted = sent - dropped;
 
     tenantStat.totalSent += sent;
     tenantStat.totalAccepted += accepted;
