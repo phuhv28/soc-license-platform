@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,15 +20,23 @@ func main() {
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		redisURL = "soc-redis:6379"
+		redisURL = "redis:6379"
 	}
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
 	if kafkaBrokers == "" {
-		kafkaBrokers = "soc-kafka:9092"
+		kafkaBrokers = "kafka:9092"
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	burstMultiplierStr := os.Getenv("BURST_MULTIPLIER")
+	burstMultiplier := 10.0
+	if burstMultiplierStr != "" {
+		if parsed, err := strconv.ParseFloat(burstMultiplierStr, 64); err == nil && parsed >= 1.0 {
+			burstMultiplier = parsed
+		}
 	}
 
 	redisClient := redis.NewClient(&redis.Options{
@@ -46,7 +55,7 @@ func main() {
 	}
 	defer kafkaProducer.Close()
 
-	metricsManager := newMetricsManager(redisClient, logger)
+	metricsManager := newMetricsManager(redisClient, burstMultiplier, logger)
 	metricsManager.Start()
 	defer metricsManager.Stop()
 

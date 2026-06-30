@@ -2,6 +2,7 @@ package com.vcs.management.report.service;
 
 import com.vcs.management.common.exception.BadRequestException;
 import com.vcs.management.common.exception.ResourceNotFoundException;
+import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
 import com.vcs.management.usage.service.UsageApiService;
@@ -24,6 +25,7 @@ class ReportServiceTest {
 
     @Mock private UsageApiService usageApiService;
     @Mock private TenantRepository tenantRepository;
+    @Mock private LicenseRepository licenseRepository;
 
     private ReportService reportService;
     private UUID tenantId;
@@ -31,7 +33,7 @@ class ReportServiceTest {
 
     @BeforeEach
     void setUp() {
-        reportService = new ReportService(usageApiService, tenantRepository);
+        reportService = new ReportService(usageApiService, tenantRepository, licenseRepository);
         tenantId = UUID.randomUUID();
         tenant = new Tenant("Test Tenant");
         try {
@@ -49,7 +51,7 @@ class ReportServiceTest {
 
         String csv = reportService.generateMonthlyCsv(tenantId, "2026-01");
 
-        assertTrue(csv.startsWith("Date,Received,Accepted,Dropped\n"));
+        assertTrue(csv.startsWith("Date,Received,Accepted,Dropped,Overflow\n"));
         // January has 31 days → 31 data rows + 1 header
         long lineCount = csv.lines().count();
         assertEquals(32, lineCount);

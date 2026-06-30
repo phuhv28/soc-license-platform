@@ -2,6 +2,9 @@ package com.vcs.management.report.service;
 
 import com.vcs.management.common.exception.BadRequestException;
 import com.vcs.management.common.exception.ResourceNotFoundException;
+import com.vcs.management.license.entity.License;
+import com.vcs.management.license.repository.LicenseRepository;
+import com.vcs.management.common.enums.LicenseStatus;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
 import com.vcs.management.usage.service.UsageApiService;
@@ -25,14 +28,16 @@ public class ReportService {
     private static final Logger log = LoggerFactory.getLogger(ReportService.class);
     private static final DateTimeFormatter DAY_KEY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter DISPLAY_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final String CSV_HEADER = "Date,Received,Accepted,Dropped\n";
+    private static final String CSV_HEADER = "Date,Received,Accepted,Dropped,Overflow\n";
 
     private final UsageApiService usageApiService;
     private final TenantRepository tenantRepository;
+    private final LicenseRepository licenseRepository;
 
-    public ReportService(UsageApiService usageApiService, TenantRepository tenantRepository) {
+    public ReportService(UsageApiService usageApiService, TenantRepository tenantRepository, LicenseRepository licenseRepository) {
         this.usageApiService = usageApiService;
         this.tenantRepository = tenantRepository;
+        this.licenseRepository = licenseRepository;
     }
 
     /**
@@ -45,6 +50,17 @@ public class ReportService {
     public String generateMonthlyCsv(UUID tenantId, String month) {
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant not found"));
+
+        Integer epsQuota = 0;
+        java.util.List<License> licenses = licenseRepository.findAllByTenantTenantIdOrderByCreatedAtDesc(tenantId);
+        for (License l : licenses) {
+            if (l.getStatus() == LicenseStatus.ACTIVE) {
+                epsQuota = l.getEpsQuota();
+                break;
+            }
+        }
+        
+        long dailyBaseCapacity = epsQuota * 86400L;
 
         YearMonth yearMonth = parseMonth(month);
         LocalDate startDate = yearMonth.atDay(1);
@@ -66,11 +82,17 @@ public class ReportService {
             long received = usageApiService.getDailyCounter(tenantId, "received", dayKey);
             long accepted = usageApiService.getDailyCounter(tenantId, "accepted", dayKey);
             long dropped = usageApiService.getDailyCounter(tenantId, "dropped", dayKey);
+            
+            long overflow = 0;
+            if (accepted > dailyBaseCapacity) {
+                overflow = accepted - dailyBaseCapacity;
+            }
 
             csv.append(displayDate).append(',')
                .append(received).append(',')
                .append(accepted).append(',')
-               .append(dropped).append('\n');
+               .append(dropped).append(',')
+               .append(overflow).append('\n');
         }
 
         log.info("Generated CSV report for tenant {} ({}), month {}",

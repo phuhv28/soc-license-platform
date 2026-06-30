@@ -137,6 +137,7 @@ services:
       REDIS_URL: soc-redis:6379
       KAFKA_BROKERS: soc-kafka:9092
       PORT: 8080
+      BURST_MULTIPLIER: 3
     depends_on:
       redis:
         condition: service_healthy

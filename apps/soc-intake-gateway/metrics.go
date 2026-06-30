@@ -14,45 +14,32 @@ import (
 var tokenPrefetchScript = redis.NewScript(`
 	local quota = tonumber(KEYS[1])
 	local tokens_key = KEYS[2]
-	local timestamp_key = KEYS[3]
-	local rate = quota
-	local capacity = quota
 
 	local now = tonumber(ARGV[1])
 	local requested = tonumber(ARGV[2])
-
-	local fill_time = capacity / rate
-	local ttl = math.floor(fill_time * 2)
-	if ttl < 60 then
-		ttl = 60
-	end
-
-	local last_tokens = tonumber(redis.call("get", tokens_key))
-	if last_tokens == nil then
-		last_tokens = capacity
-	end
-
-	local last_refreshed = tonumber(redis.call("get", timestamp_key))
-	if last_refreshed == nil then
-		last_refreshed = 0
-	end
-
-	local delta = math.max(0, now - last_refreshed)
-	local filled_tokens = math.min(capacity, last_tokens + (delta * rate))
+	local burst_multiplier = tonumber(ARGV[3])
 	
-	local granted = 0
-	if filled_tokens >= requested then
-		granted = requested
-		filled_tokens = filled_tokens - requested
-	else
-		granted = math.floor(filled_tokens)
-		filled_tokens = filled_tokens - granted
+	local window_size = 300
+	local limit = quota * burst_multiplier * window_size
+
+	local current_window = math.floor(now / window_size)
+	local key = tokens_key .. ":" .. current_window
+
+	local current_usage = tonumber(redis.call("get", key) or "0")
+
+	if current_usage + requested > limit then
+		local granted = limit - current_usage
+		if granted > 0 then
+			redis.call("incrby", key, granted)
+			redis.call("expire", key, window_size * 2)
+			return granted
+		end
+		return 0
 	end
 
-	redis.call("setex", tokens_key, ttl, filled_tokens)
-	redis.call("setex", timestamp_key, ttl, now)
-
-	return granted
+	redis.call("incrby", key, requested)
+	redis.call("expire", key, window_size * 2)
+	return requested
 `)
 
 type tenantDimensionMetrics struct {
@@ -98,14 +85,17 @@ type metricsManager struct {
 	statesMu sync.RWMutex
 	states   map[string]*tenantState
 
+	burstMultiplier float64
+
 	cancel context.CancelFunc
 }
 
-func newMetricsManager(client *redis.Client, logger *zap.Logger) *metricsManager {
+func newMetricsManager(client *redis.Client, burstMultiplier float64, logger *zap.Logger) *metricsManager {
 	return &metricsManager{
 		client: client,
 		logger: logger,
 		states: make(map[string]*tenantState),
+		burstMultiplier: burstMultiplier,
 	}
 }
 
@@ -167,7 +157,7 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 			fmt.Sprintf("rl:tokens:%s", tenantID),
 			fmt.Sprintf("rl:ts:%s", tenantID),
 		}
-		grantedIntf, err := tokenPrefetchScript.Run(ctx, m.client, keys, nowFloat, prefetch).Result()
+		grantedIntf, err := tokenPrefetchScript.Run(ctx, m.client, keys, nowFloat, prefetch, m.burstMultiplier).Result()
 		if err == nil {
 			state.tokens += grantedIntf.(int64)
 		} else {
