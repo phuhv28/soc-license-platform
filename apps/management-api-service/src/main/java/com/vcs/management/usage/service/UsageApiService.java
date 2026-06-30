@@ -255,6 +255,9 @@ public class UsageApiService {
         } else if ("15m".equals(window)) {
             timeKey = getFloorMinuteWindow(nowSeconds, 15);
             windowSeconds = 900;
+        } else if ("1d".equals(window)) {
+            timeKey = getDayWindow(nowSeconds);
+            windowSeconds = 86400;
         } else {
             // default to 1m
             timeKey = getMinuteWindow(nowSeconds);
@@ -327,6 +330,9 @@ public class UsageApiService {
         } else if ("15m".equals(window)) {
             timeKey = getFloorMinuteWindow(nowSeconds, 15);
             windowSeconds = 900;
+        } else if ("1d".equals(window)) {
+            timeKey = getDayWindow(nowSeconds);
+            windowSeconds = 86400;
         } else {
             timeKey = getMinuteWindow(nowSeconds);
             windowSeconds = 60;

@@ -256,11 +256,11 @@ func (m *metricsManager) flushToRedis() {
 		incrementWindowCounters(pipe, tenantID, "1d", window1d, received, accepted, dropped, 90*24*time.Hour)
 
 		for agent, mStats := range currentMetrics.AgentMetrics {
-			incrementDimension(pipe, tenantID, "agent", agent, window1m, window5m, window15m, mStats.Received, mStats.Accepted, mStats.Dropped)
+			incrementDimension(pipe, tenantID, "agent", agent, window1m, window5m, window15m, window1d, mStats.Received, mStats.Accepted, mStats.Dropped)
 		}
 
 		for ls, mStats := range currentMetrics.LogSourceMetrics {
-			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, mStats.Received, mStats.Accepted, mStats.Dropped)
+			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, window1d, mStats.Received, mStats.Accepted, mStats.Dropped)
 		}
 	}
 
@@ -291,17 +291,19 @@ func incrementWindowCounters(pipe redis.Pipeliner, tenantId, windowType, windowK
 	}
 }
 
-func incrementDimension(pipe redis.Pipeliner, tenantId, dimType, dimValue, window1m, window5m, window15m string, received, accepted, dropped int64) {
+func incrementDimension(pipe redis.Pipeliner, tenantId, dimType, dimValue, window1m, window5m, window15m, window1d string, received, accepted, dropped int64) {
 	windows := map[string]string{
 		"1m":  window1m,
 		"5m":  window5m,
 		"15m": window15m,
+		"1d":  window1d,
 	}
 
 	ttls := map[string]time.Duration{
 		"1m":  48 * time.Hour,
 		"5m":  7 * 24 * time.Hour,
 		"15m": 14 * 24 * time.Hour,
+		"1d":  90 * 24 * time.Hour,
 	}
 
 	for wType, wKey := range windows {

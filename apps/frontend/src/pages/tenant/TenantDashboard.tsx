@@ -15,12 +15,6 @@ import { licensesApi, type License } from '../../api/licenses';
 import { alertsApi, type Alert } from '../../api/alerts';
 import { reportsApi } from '../../api/reports';
 
-const WINDOW_OPTIONS = [
-  { value: '1m',  label: '1 Min' },
-  { value: '5m',  label: '5 Min' },
-  { value: '15m', label: '15 Min' },
-  { value: '1d',  label: '1 Day' },
-];
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const SOURCE_COLORS = ['#388bfd','#bc8cff','#3fb950','#f5a623','#f85149','#58a6ff','#39d353','#fb923c','#a78bfa','#34d399'];
@@ -313,14 +307,14 @@ export default function TenantDashboard() {
   const [licenses, setLicenses] = useState<License[]>([]);
   const [alerts, setAlerts]   = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
-  const [historyWindow, setHistoryWindow] = useState('1m');
+  const historyWindow = '15m';
 
   const fetchData = async () => {
     if (!tenantId) return;
     try {
       const [usageData, historyData, licensesData, alertsData] = await Promise.all([
         usageApi.getCurrent(tenantId),
-        usageApi.getHistory(tenantId, historyWindow, 60),
+        usageApi.getHistory(tenantId, '15m', 96), // 96 * 15m = 24 hours
         licensesApi.getByTenant(tenantId),
         alertsApi.getAll({ tenantId, status: 'OPEN' }),
       ]);
@@ -360,9 +354,7 @@ export default function TenantDashboard() {
   }
 
   const chartData = history?.dataPoints
-    ? history.dataPoints
-        .filter((_, i) => historyWindow === '1d' ? true : i % 3 === 0)
-        .map(dp => ({
+    ? history.dataPoints.map(dp => ({
           time: dp.timestamp.includes('T') ? dp.timestamp.split('T')[1].slice(0, 5) : dp.timestamp,
           received: dp.received,
           accepted: dp.accepted,
@@ -432,15 +424,7 @@ export default function TenantDashboard() {
           <div className="card-header">
             <h3>EPS Timeline</h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
-              {WINDOW_OPTIONS.map(opt => (
-                <button
-                  key={opt.value}
-                  className={`filter-tag ${historyWindow === opt.value ? 'active' : ''}`}
-                  onClick={() => setHistoryWindow(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
+              <span className="filter-tag active">24 Hours</span>
             </div>
           </div>
           <div className="card-body">
@@ -543,14 +527,14 @@ export default function TenantDashboard() {
         {tenantId && (
           <>
             <DimensionTable
-              title={`Log Sources · ${historyWindow}`}
+              title={`Top Log Sources (Last 15m)`}
               tenantId={tenantId}
               dimension="logsource"
               window={historyWindow}
               colors={SOURCE_COLORS}
             />
             <DimensionTable
-              title={`Agents · ${historyWindow}`}
+              title={`Top Agents (Last 15m)`}
               tenantId={tenantId}
               dimension="agent"
               window={historyWindow}
