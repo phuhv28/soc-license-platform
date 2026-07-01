@@ -114,7 +114,8 @@ services:
       TENANT_IDS: "146fcfa5-5ccb-4698-b02c-8b5c661a3c3e"
       EPS: "100"
       BATCH_SIZE: "50"
-      COLLECTOR_URL: "http://haproxy:4318"
+      COLLECTOR_URL: "https://haproxy:4318"
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
     depends_on:
       - haproxy
 
@@ -123,6 +124,7 @@ services:
     container_name: haproxy
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/etc/ssl/certs:ro
     ports:
       - "4317:4317"
       - "4318:4318"
