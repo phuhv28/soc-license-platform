@@ -102,7 +102,7 @@ func (s *intakeServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		acceptedBytes, err := json.Marshal(acceptedEvents)
 		if err != nil {
 			s.logger.Error("Failed to marshal accepted events", zap.Error(err))
-		} else {
+		} else if s.kafkaProducer != nil {
 			if err := s.kafkaProducer.Produce(context.Background(), tenantID, acceptedBytes); err != nil {
 				s.logger.Error("Failed to produce to kafka", zap.Error(err))
 			}
