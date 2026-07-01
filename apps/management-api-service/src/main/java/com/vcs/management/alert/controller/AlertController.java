@@ -41,14 +41,14 @@ public class AlertController {
         return ApiResponse.success(alertService.getAlert(alertId));
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TENANT')")
     @PutMapping("/{alertId}/resolve")
     public ResponseEntity<ApiResponse<AlertResponse>> resolveAlert(@PathVariable UUID alertId) {
         AlertResponse response = alertService.resolveAlert(alertId);
         return ResponseEntity.ok(ApiResponse.success("Alert resolved successfully", response));
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TENANT')")
     @PutMapping("/{alertId}/ignore")
     public ResponseEntity<ApiResponse<AlertResponse>> ignoreAlert(@PathVariable UUID alertId) {
         AlertResponse response = alertService.ignoreAlert(alertId);

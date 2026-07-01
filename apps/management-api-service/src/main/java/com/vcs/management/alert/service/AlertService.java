@@ -21,6 +21,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.time.Instant;
 import java.util.List;
@@ -90,6 +95,7 @@ public class AlertService {
     @Transactional
     public AlertResponse resolveAlert(UUID alertId) {
         Alert alert = findAlert(alertId);
+        checkAlertOwnership(alert);
         String beforeValue = toJson(AlertResponse.from(alert));
 
         alert.setStatus(AlertStatus.RESOLVED);
@@ -112,6 +118,7 @@ public class AlertService {
     @Transactional
     public AlertResponse ignoreAlert(UUID alertId) {
         Alert alert = findAlert(alertId);
+        checkAlertOwnership(alert);
         String beforeValue = toJson(AlertResponse.from(alert));
 
         alert.setStatus(AlertStatus.IGNORED);
@@ -243,6 +250,34 @@ public class AlertService {
     private Alert findAlert(UUID alertId) {
         return alertRepository.findById(alertId)
                 .orElseThrow(() -> new ResourceNotFoundException("Alert not found"));
+    }
+
+    private void checkAlertOwnership(Alert alert) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) {
+            throw new AccessDeniedException("Unauthorized");
+        }
+
+        boolean isAdmin = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        if (isAdmin) {
+            return;
+        }
+
+        if (auth instanceof JwtAuthenticationToken jwtToken) {
+            Jwt jwt = jwtToken.getToken();
+            Object tenantIdClaim = jwt.getClaim("tenantId");
+            String alertTenantId = alert.getTenant().getTenantId().toString();
+
+            if (tenantIdClaim != null) {
+                if (tenantIdClaim instanceof String str && str.equals(alertTenantId)) {
+                    return;
+                } else if (tenantIdClaim instanceof List<?> list && list.contains(alertTenantId)) {
+                    return;
+                }
+            }
+        }
+        throw new AccessDeniedException("Access Denied: You do not own this alert.");
     }
 
     private String toJson(AlertResponse response) {

@@ -55,6 +55,13 @@ class AlertServiceTest {
             tenantId = UUID.randomUUID();
             f.set(tenant, tenantId);
         } catch (Exception e) { throw new RuntimeException(e); }
+
+        org.springframework.security.core.Authentication auth = mock(org.springframework.security.core.Authentication.class);
+        org.springframework.security.core.context.SecurityContext secContext = mock(org.springframework.security.core.context.SecurityContext.class);
+        lenient().when(secContext.getAuthentication()).thenReturn(auth);
+        org.springframework.security.core.context.SecurityContextHolder.setContext(secContext);
+        lenient().when(auth.isAuthenticated()).thenReturn(true);
+        lenient().when(auth.getAuthorities()).thenAnswer(inv -> List.of((org.springframework.security.core.GrantedAuthority) () -> "ROLE_ADMIN"));
     }
 
     @Nested
