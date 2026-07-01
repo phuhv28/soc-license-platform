@@ -42,7 +42,7 @@ public class AlertTriggerScheduler {
         this.alertService = alertService;
     }
 
-    @Scheduled(fixedRate = 60_000)
+    @Scheduled(cron = "5 * * * * *")
     public void checkUsageAlerts() {
         log.debug("Running usage alert check...");
 
@@ -72,7 +72,7 @@ public class AlertTriggerScheduler {
             return;
         }
 
-        int usagePercent = usageApiService.getUsagePercent(tenant.getTenantId());
+        int usagePercent = usageApiService.getPreviousMinuteUsagePercent(tenant.getTenantId());
 
         if (usagePercent >= 70) {
             alertService.triggerUsageAlert(tenant.getTenantId(), usagePercent);

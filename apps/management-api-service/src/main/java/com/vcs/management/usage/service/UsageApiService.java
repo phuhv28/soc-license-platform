@@ -117,6 +117,25 @@ public class UsageApiService {
     }
 
     /**
+     * Get the usage percentage based ONLY on the previous completed minute.
+     * This provides a stable EPS reading over a full 60 seconds, preventing false
+     * spikes that can occur when calculating EPS in the first few seconds of a new minute.
+     */
+    public int getPreviousMinuteUsagePercent(UUID tenantId) {
+        long quota = getQuota(tenantId);
+        if (quota <= 0) {
+            return 0;
+        }
+
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        String prevWindow = getMinuteWindow(nowSeconds - 60);
+        long received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
+        long prevEps = (long) Math.ceil(received / 60.0);
+
+        return (int) ((prevEps * 100) / quota);
+    }
+
+    /**
      * Get the current received EPS by reading the most recent 1-minute counter.
      */
     public long getCurrentReceivedEps(UUID tenantId) {
