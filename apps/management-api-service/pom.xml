@@ -61,6 +61,12 @@
 			<artifactId>spring-kafka</artifactId>
 		</dependency>
 
+		<!-- Prometheus Metrics -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+
 		<!-- Security & Keycloak -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

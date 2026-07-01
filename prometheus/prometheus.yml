@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'management-api'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['management-api-service:8080']
+
+  - job_name: 'collector-gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['soc-intake-gateway:8080']

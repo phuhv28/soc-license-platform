@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -30,6 +31,7 @@ func (s *intakeServer) router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/logs", s.handleLogs)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }
 
