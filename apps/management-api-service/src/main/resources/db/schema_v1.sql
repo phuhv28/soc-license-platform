@@ -138,6 +138,7 @@ CREATE TABLE alerts (
     message           TEXT NOT NULL,
     threshold_percent INTEGER,
     current_percent   INTEGER,
+    trigger_count     INTEGER NOT NULL DEFAULT 1,
     triggered_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolved_at       TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

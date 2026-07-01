@@ -21,7 +21,10 @@ public class BillingMetricsConsumer {
     private final BillingMetricRepository billingMetricRepository;
     private final ObjectMapper objectMapper;
 
-    public BillingMetricsConsumer(BillingMetricRepository billingMetricRepository, ObjectMapper objectMapper) {
+    public BillingMetricsConsumer(
+            BillingMetricRepository billingMetricRepository,
+            ObjectMapper objectMapper
+    ) {
         this.billingMetricRepository = billingMetricRepository;
         this.objectMapper = objectMapper;
     }

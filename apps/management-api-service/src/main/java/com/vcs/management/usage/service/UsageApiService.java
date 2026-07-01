@@ -48,19 +48,21 @@ public class UsageApiService {
      * @return current accepted EPS (events in last minute / 60)
      */
     public long getCurrentEps(UUID tenantId) {
-        long now = System.currentTimeMillis() / 1000;
+        long nowSeconds = System.currentTimeMillis() / 1000;
 
         // Try current minute
-        String currentWindow = getMinuteWindow(now);
+        String currentWindow = getMinuteWindow(nowSeconds);
         long received = getCounterValue(tenantId.toString(), "received", "1m", currentWindow);
 
-        if (received == 0) {
-            // Fall back to previous minute (counter may not have accumulated yet)
-            String prevWindow = getMinuteWindow(now - 60);
-            received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
+        if (received > 0) {
+            long secondsElapsed = nowSeconds % 60;
+            if (secondsElapsed == 0) secondsElapsed = 1; // Prevent division by zero
+            return (long) Math.ceil((double) received / secondsElapsed);
         }
 
-        // Convert events-per-minute to events-per-second, using Math.ceil to avoid 0 EPS when events < 60
+        // Fall back to previous minute (counter may not have accumulated yet)
+        String prevWindow = getMinuteWindow(nowSeconds - 60);
+        received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
         return (long) Math.ceil(received / 60.0);
     }
 
@@ -118,14 +120,18 @@ public class UsageApiService {
      * Get the current received EPS by reading the most recent 1-minute counter.
      */
     public long getCurrentReceivedEps(UUID tenantId) {
-        long now = System.currentTimeMillis() / 1000;
-        String currentWindow = getMinuteWindow(now);
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        String currentWindow = getMinuteWindow(nowSeconds);
         long received = getCounterValue(tenantId.toString(), "received", "1m", currentWindow);
 
-        if (received == 0) {
-            String prevWindow = getMinuteWindow(now - 60);
-            received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
+        if (received > 0) {
+            long secondsElapsed = nowSeconds % 60;
+            if (secondsElapsed == 0) secondsElapsed = 1; // Prevent division by zero
+            return (long) Math.ceil((double) received / secondsElapsed);
         }
+
+        String prevWindow = getMinuteWindow(nowSeconds - 60);
+        received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
         return (long) Math.ceil(received / 60.0);
     }
 

@@ -60,6 +60,9 @@ public class Alert {
     @Column(name = "current_percent")
     private Integer currentPercent;
 
+    @Column(name = "trigger_count", nullable = false)
+    private Integer triggerCount = 1;
+
     @Column(name = "triggered_at", nullable = false)
     private Instant triggeredAt;
 
@@ -152,5 +155,17 @@ public class Alert {
 
     public void setCurrentPercent(Integer currentPercent) {
         this.currentPercent = currentPercent;
+    }
+
+    public Integer getTriggerCount() {
+        return triggerCount;
+    }
+
+    public void setTriggerCount(Integer triggerCount) {
+        this.triggerCount = triggerCount;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
     }
 }

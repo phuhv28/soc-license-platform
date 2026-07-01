@@ -144,25 +144,13 @@ public class AlertService {
         if (currentPercent >= 100) {
             createUsageAlertIfNotExists(tenantId, AlertType.USAGE_100_PERCENT,
                     AlertSeverity.CRITICAL, 100, currentPercent);
-        }
-        if (currentPercent >= 70) {
+        } else if (currentPercent >= 70) {
             createUsageAlertIfNotExists(tenantId, AlertType.USAGE_70_PERCENT,
                     AlertSeverity.WARNING, 70, currentPercent);
         }
     }
 
-    /**
-     * Auto-resolve usage alerts when usage drops below threshold.
-     */
-    @Transactional
-    public void autoResolveUsageAlerts(UUID tenantId, int currentPercent) {
-        if (currentPercent < 70) {
-            autoResolveByType(tenantId, AlertType.USAGE_70_PERCENT);
-            autoResolveByType(tenantId, AlertType.USAGE_100_PERCENT);
-        } else if (currentPercent < 100) {
-            autoResolveByType(tenantId, AlertType.USAGE_100_PERCENT);
-        }
-    }
+
 
     // ── License Expiration Alert Trigger ─────────────────────────────────
 
@@ -210,12 +198,22 @@ public class AlertService {
                 tenantId, alertType, AlertStatus.OPEN);
 
         if (existing.isPresent()) {
-            // Update currentPercent on existing alert
             Alert alert = existing.get();
+
+            // Cooldown: Only update if the alert was last updated more than 60 seconds ago
+            Instant lastUpdated = alert.getUpdatedAt() != null ? alert.getUpdatedAt() : alert.getCreatedAt();
+            if (lastUpdated != null && lastUpdated.isAfter(Instant.now().minusSeconds(60))) {
+                return; // Skip to avoid database spam and artificially inflating the triggerCount
+            }
+
+            // Update currentPercent and triggerCount on existing alert
             alert.setCurrentPercent(currentPercent);
+            alert.setTriggerCount(alert.getTriggerCount() + 1);
+            alert.setMessage(String.format("Tenant '%s' EPS usage reached %d%% of quota (Triggered %d times)",
+                    alert.getTenant().getName(), currentPercent, alert.getTriggerCount()));
             alertRepository.save(alert);
-            log.debug("Updated existing {} alert for tenant {}, currentPercent={}",
-                    alertType, tenantId, currentPercent);
+            log.debug("Updated existing {} alert for tenant {}, currentPercent={}, count={}",
+                    alertType, tenantId, currentPercent, alert.getTriggerCount());
             return;
         }
 
@@ -230,8 +228,8 @@ public class AlertService {
                 .findFirst()
                 .orElse(null);
 
-        String message = String.format("Tenant '%s' EPS usage reached %d%% of quota (threshold: %d%%)",
-                tenant.getName(), currentPercent, threshold);
+        String message = String.format("Tenant '%s' EPS usage reached %d%% of quota (Triggered 1 times)",
+                tenant.getName(), currentPercent);
 
         Alert alert = new Alert(tenant, license, alertType, severity,
                 message, threshold, currentPercent);
@@ -240,15 +238,7 @@ public class AlertService {
         log.info("Created {} alert for tenant {}, currentPercent={}", alertType, tenantId, currentPercent);
     }
 
-    private void autoResolveByType(UUID tenantId, AlertType alertType) {
-        alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(tenantId, alertType, AlertStatus.OPEN)
-                .ifPresent(alert -> {
-                    alert.setStatus(AlertStatus.RESOLVED);
-                    alert.setResolvedAt(Instant.now());
-                    alertRepository.save(alert);
-                    log.info("Auto-resolved {} alert for tenant {}", alertType, tenantId);
-                });
-    }
+
 
     private Alert findAlert(UUID alertId) {
         return alertRepository.findById(alertId)

@@ -75,11 +75,13 @@ type tenantState struct {
 	lastKnownQuota int64
 	metricsMu      sync.RWMutex
 	metrics        *tenantMetrics
+	kafkaMetrics   *tenantMetrics
 }
 
 func newTenantState() *tenantState {
 	return &tenantState{
-		metrics: newTenantMetrics(),
+		metrics:      newTenantMetrics(),
+		kafkaMetrics: newTenantMetrics(),
 	}
 }
 
@@ -111,6 +113,7 @@ func (m *metricsManager) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.syncLoop(ctx)
+	go m.kafkaSyncLoop(ctx)
 }
 
 func (m *metricsManager) Stop() {
@@ -213,6 +216,10 @@ func (m *metricsManager) recordMetrics(tenantID, agentName, logSource string, re
 	state.metrics.TotalReceived += received
 	state.metrics.TotalAccepted += accepted
 	state.metrics.TotalDropped += dropped
+
+	state.kafkaMetrics.TotalReceived += received
+	state.kafkaMetrics.TotalAccepted += accepted
+	state.kafkaMetrics.TotalDropped += dropped
 	
 	if _, ok := state.metrics.AgentMetrics[agentName]; !ok {
 		state.metrics.AgentMetrics[agentName] = &tenantDimensionMetrics{}
@@ -289,21 +296,6 @@ func (m *metricsManager) flushToRedis() {
 		for ls, mStats := range currentMetrics.LogSourceMetrics {
 			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, window1d, mStats.Received, mStats.Accepted, mStats.Dropped)
 		}
-
-		// Produce to Kafka
-		if m.kafkaProducer != nil {
-			deltaMsg := map[string]interface{}{
-				"tenant_id":   tenantID,
-				"window_type": "1m",
-				"window_key":  window1m,
-				"received":    received,
-				"accepted":    accepted,
-				"dropped":     dropped,
-			}
-			if msgBytes, err := json.Marshal(deltaMsg); err == nil {
-				m.kafkaProducer.ProduceBillingMetric(context.Background(), tenantID, msgBytes)
-			}
-		}
 	}
 
 	if hasData {
@@ -311,6 +303,65 @@ func (m *metricsManager) flushToRedis() {
 		defer cancel()
 		if _, err := pipe.Exec(ctx); err != nil {
 			m.logger.Error("Failed to flush redis metrics", zap.Error(err))
+		}
+	}
+}
+
+func (m *metricsManager) kafkaSyncLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.flushToKafka()
+		}
+	}
+}
+
+func (m *metricsManager) flushToKafka() {
+	if m.kafkaProducer == nil {
+		return
+	}
+
+	nowSec := time.Now().Unix()
+	window5m := getFloorMinuteWindow(nowSec, 5)
+
+	m.statesMu.RLock()
+	var tenantIDs []string
+	for tenantID := range m.states {
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	m.statesMu.RUnlock()
+
+	for _, tenantID := range tenantIDs {
+		state := m.getTenantState(tenantID)
+		
+		state.metricsMu.Lock()
+		currentMetrics := state.kafkaMetrics
+		state.kafkaMetrics = newTenantMetrics()
+		state.metricsMu.Unlock()
+
+		if currentMetrics.TotalReceived == 0 {
+			continue
+		}
+
+		received := currentMetrics.TotalReceived
+		accepted := currentMetrics.TotalAccepted
+		dropped := currentMetrics.TotalDropped
+
+		deltaMsg := map[string]interface{}{
+			"tenant_id":   tenantID,
+			"window_type": "5m",
+			"window_key":  window5m,
+			"received":    received,
+			"accepted":    accepted,
+			"dropped":     dropped,
+		}
+		if msgBytes, err := json.Marshal(deltaMsg); err == nil {
+			m.kafkaProducer.ProduceBillingMetric(context.Background(), tenantID, msgBytes)
 		}
 	}
 }

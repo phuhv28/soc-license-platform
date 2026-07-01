@@ -81,8 +81,8 @@ class AlertServiceTest {
         }
 
         @Test
-        @DisplayName("should create both 70% and 100% alerts when usage >= 100")
-        void shouldCreateBothAlerts() {
+        @DisplayName("should only create 100% alert when usage >= 100")
+        void shouldCreateOnly100PercentAlert() {
             when(alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(any(), any(), any()))
                     .thenReturn(Optional.empty());
             when(tenantRepository.findById(tenantId)).thenReturn(Optional.of(tenant));
@@ -91,68 +91,31 @@ class AlertServiceTest {
 
             alertService.triggerUsageAlert(tenantId, 105);
 
-            verify(alertRepository, times(2)).save(any(Alert.class));
+            // With the else-if logic, it should only create 1 alert (the 100% one)
+            verify(alertRepository, times(1)).save(any(Alert.class));
         }
 
         @Test
-        @DisplayName("should not create duplicate alert if OPEN alert exists")
-        void shouldNotDuplicate() {
+        @DisplayName("should not create duplicate alert if OPEN alert exists, but should increment triggerCount")
+        void shouldNotDuplicateButUpdate() {
             Alert existingAlert = new Alert(tenant, null, AlertType.USAGE_70_PERCENT,
                     AlertSeverity.WARNING, "test", 70, 75);
             when(alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(
                     tenantId, AlertType.USAGE_70_PERCENT, AlertStatus.OPEN))
                     .thenReturn(Optional.of(existingAlert));
 
-            alertService.triggerUsageAlert(tenantId, 75);
+            alertService.triggerUsageAlert(tenantId, 80);
 
             // Should update existing, not create new
             verify(alertRepository, times(1)).save(existingAlert);
             verify(tenantRepository, never()).findById(any());
+            
+            assertEquals(80, existingAlert.getCurrentPercent());
+            assertEquals(2, existingAlert.getTriggerCount());
+            assertTrue(existingAlert.getMessage().contains("Triggered 2 times"));
         }
     }
 
-    @Nested
-    @DisplayName("autoResolveUsageAlerts")
-    class AutoResolveTests {
-
-        @Test
-        @DisplayName("should resolve both alerts when usage < 70")
-        void shouldResolveBoth() {
-            Alert alert70 = new Alert(tenant, null, AlertType.USAGE_70_PERCENT,
-                    AlertSeverity.WARNING, "70%", 70, 75);
-            Alert alert100 = new Alert(tenant, null, AlertType.USAGE_100_PERCENT,
-                    AlertSeverity.CRITICAL, "100%", 100, 110);
-
-            when(alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(
-                    tenantId, AlertType.USAGE_70_PERCENT, AlertStatus.OPEN))
-                    .thenReturn(Optional.of(alert70));
-            when(alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(
-                    tenantId, AlertType.USAGE_100_PERCENT, AlertStatus.OPEN))
-                    .thenReturn(Optional.of(alert100));
-
-            alertService.autoResolveUsageAlerts(tenantId, 50);
-
-            assertEquals(AlertStatus.RESOLVED, alert70.getStatus());
-            assertEquals(AlertStatus.RESOLVED, alert100.getStatus());
-            assertNotNull(alert70.getResolvedAt());
-        }
-
-        @Test
-        @DisplayName("should only resolve 100% alert when usage between 70 and 100")
-        void shouldResolveOnly100() {
-            Alert alert100 = new Alert(tenant, null, AlertType.USAGE_100_PERCENT,
-                    AlertSeverity.CRITICAL, "100%", 100, 110);
-
-            when(alertRepository.findByTenantTenantIdAndAlertTypeAndStatus(
-                    tenantId, AlertType.USAGE_100_PERCENT, AlertStatus.OPEN))
-                    .thenReturn(Optional.of(alert100));
-
-            alertService.autoResolveUsageAlerts(tenantId, 80);
-
-            assertEquals(AlertStatus.RESOLVED, alert100.getStatus());
-            verify(alertRepository, times(1)).save(any());
-        }
-    }
 
     @Nested
     @DisplayName("resolveAlert")

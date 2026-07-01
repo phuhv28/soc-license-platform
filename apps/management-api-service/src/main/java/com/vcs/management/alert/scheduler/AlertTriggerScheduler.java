@@ -17,7 +17,6 @@ import java.util.List;
 /**
  * Scheduler that periodically checks EPS usage for all active tenants
  * and triggers alerts when usage exceeds 70% or 100% of quota.
- * Also auto-resolves alerts when usage drops below thresholds.
  *
  * Runs every 60 seconds.
  */
@@ -77,9 +76,6 @@ public class AlertTriggerScheduler {
 
         if (usagePercent >= 70) {
             alertService.triggerUsageAlert(tenant.getTenantId(), usagePercent);
-        } else {
-            // Auto-resolve if usage dropped below threshold
-            alertService.autoResolveUsageAlerts(tenant.getTenantId(), usagePercent);
         }
     }
 }
