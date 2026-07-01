@@ -140,6 +140,7 @@ services:
       PORT: 8080
       BURST_MULTIPLIER: 3
       TZ: Asia/Ho_Chi_Minh
+      MANAGEMENT_API_URL: http://management-api-service:8080
     depends_on:
       redis:
         condition: service_healthy

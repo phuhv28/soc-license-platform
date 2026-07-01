@@ -18,9 +18,9 @@ public class TenantAuthorizationInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        // Only intercept /api/v1/... requests that contain tenantId
+        // Only intercept /api/v1/... requests that contain tenantId, skip internal endpoints
         String path = request.getRequestURI();
-        if (!path.startsWith("/api/v1/")) {
+        if (!path.startsWith("/api/v1/") || path.startsWith("/api/v1/internal/")) {
             return true;
         }
 

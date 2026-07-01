@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -65,11 +68,11 @@ func newTenantMetrics() *tenantMetrics {
 }
 
 type tenantState struct {
-	mu     sync.Mutex
-	tokens int64
-
-	metricsMu sync.Mutex
-	metrics   *tenantMetrics
+	mu             sync.Mutex
+	tokens         int64
+	lastKnownQuota int64
+	metricsMu      sync.RWMutex
+	metrics        *tenantMetrics
 }
 
 func newTenantState() *tenantState {
@@ -138,16 +141,35 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 
 	if state.tokens < requested {
 		needed := requested - state.tokens
-		prefetch := int64(200) // Default batch size
-		if needed > prefetch {
-			prefetch = needed
+
+		quotaStr, err := m.client.Get(ctx, "quota:"+tenantID).Result()
+		var quota int64
+		
+		if err == redis.Nil {
+			// Read-Through cache miss: fetch from API
+			quota = fetchQuotaFromAPI(tenantID)
+		} else if err == nil {
+			quota, _ = strconv.ParseInt(quotaStr, 10, 64)
 		}
 
-		quotaStr, _ := m.client.Get(ctx, "quota:"+tenantID).Result()
-		quota, err := strconv.ParseInt(quotaStr, 10, 64)
-		if err != nil || quota <= 0 {
-			// No active license or quota is 0, reject all logs
-			return 0
+		if quota <= 0 {
+			// Resilience: fallback to local memory if Redis is down or API fails
+			if state.lastKnownQuota > 0 {
+				quota = state.lastKnownQuota
+			} else {
+				return 0 // No active license and no history
+			}
+		} else {
+			state.lastKnownQuota = quota
+		}
+
+		// Dynamic Prefetching: Xin trước lượng token tương đương 2 giây Quota (tối thiểu 50)
+		prefetch := quota * 2
+		if prefetch < 50 {
+			prefetch = 50
+		}
+		if needed > prefetch {
+			prefetch = needed
 		}
 
 		nowFloat := float64(time.Now().UnixMilli()) / 1000.0
@@ -339,4 +361,32 @@ func getFloorMinuteWindow(unixSeconds int64, minuteInterval int) string {
 
 func getDayWindow(unixSeconds int64) string {
 	return time.Unix(unixSeconds, 0).UTC().Format("20060102")
+}
+
+var httpClient = &http.Client{Timeout: 2 * time.Second}
+
+func fetchQuotaFromAPI(tenantID string) int64 {
+	apiURL := os.Getenv("MANAGEMENT_API_URL")
+	if apiURL == "" {
+		return 0
+	}
+	
+	url := fmt.Sprintf("%s/api/v1/internal/quotas/%s", apiURL, tenantID)
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0
+	}
+
+	quota, _ := strconv.ParseInt(string(body), 10, 64)
+	return quota
 }

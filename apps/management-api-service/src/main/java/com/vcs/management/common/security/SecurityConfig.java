@@ -24,7 +24,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/health/**").permitAll()
+                .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/health/**", "/api/v1/internal/**").permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 // Other APIs will be protected, and tenant ownership is checked via interceptor
                 .anyRequest().authenticated()
