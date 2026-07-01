@@ -12,4 +12,6 @@ public interface BillingMetricRepository extends JpaRepository<BillingMetric, Lo
 
     Optional<BillingMetric> findByTenantIdAndWindowTypeAndWindowKey(UUID tenantId, String windowType, String windowKey);
 
+    java.util.List<BillingMetric> findByTenantIdAndWindowTypeAndWindowKeyStartingWith(UUID tenantId, String windowType, String windowKeyPrefix);
+
 }

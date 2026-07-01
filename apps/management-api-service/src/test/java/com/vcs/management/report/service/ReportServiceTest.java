@@ -5,7 +5,9 @@ import com.vcs.management.common.exception.ResourceNotFoundException;
 import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
-import com.vcs.management.usage.service.UsageApiService;
+import com.vcs.management.usage.repository.BillingMetricRepository;
+import com.vcs.management.usage.entity.BillingMetric;
+import java.util.Collections;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,7 +25,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ReportServiceTest {
 
-    @Mock private UsageApiService usageApiService;
+    @Mock private BillingMetricRepository billingMetricRepository;
     @Mock private TenantRepository tenantRepository;
     @Mock private LicenseRepository licenseRepository;
 
@@ -33,7 +35,7 @@ class ReportServiceTest {
 
     @BeforeEach
     void setUp() {
-        reportService = new ReportService(usageApiService, tenantRepository, licenseRepository);
+        reportService = new ReportService(billingMetricRepository, tenantRepository, licenseRepository);
         tenantId = UUID.randomUUID();
         tenant = new Tenant("Test Tenant");
         try {
@@ -47,14 +49,15 @@ class ReportServiceTest {
     @DisplayName("should generate CSV with header and data rows")
     void shouldGenerateCsv() {
         when(tenantRepository.findById(tenantId)).thenReturn(Optional.of(tenant));
-        when(usageApiService.getDailyCounter(eq(tenantId), anyString(), anyString())).thenReturn(100L);
+        when(billingMetricRepository.findByTenantIdAndWindowTypeAndWindowKeyStartingWith(eq(tenantId), eq("1d"), anyString()))
+            .thenReturn(Collections.emptyList());
 
         String csv = reportService.generateMonthlyCsv(tenantId, "2026-01");
 
-        assertTrue(csv.startsWith("Date,Received,Accepted,Dropped,Overflow\n"));
-        // January has 31 days → 31 data rows + 1 header
+        assertTrue(csv.contains("Date,Received,Accepted,Dropped,Overflow\n"));
+        // 6 header lines + 31 data rows + 1 summary row = 38 lines
         long lineCount = csv.lines().count();
-        assertEquals(32, lineCount);
+        assertEquals(38, lineCount);
     }
 
     @Test

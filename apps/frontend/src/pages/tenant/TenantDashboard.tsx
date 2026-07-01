@@ -342,7 +342,8 @@ export default function TenantDashboard() {
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const [exportMonth, setExportMonth] = useState(currentMonth);
   const [exporting, setExporting] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Generate last 12 months for picker
   const monthOptions = useMemo(() => {
@@ -360,15 +361,17 @@ export default function TenantDashboard() {
   const handleExportCsv = async () => {
     if (!tenantId) return;
     setExporting(true);
-    setToast(null);
+    setToastMsg(null);
     try {
       const filename = await reportsApi.downloadUsageCsv(tenantId, exportMonth);
-      setToast({ message: `Downloaded ${filename}`, type: 'success' });
-    } catch (err: any) {
-      setToast({ message: err.message || 'Export failed', type: 'error' });
+      setToastMsg(`Successfully downloaded ${filename}`);
+      setShowExportModal(false);
+    } catch (err) {
+      console.error('Failed to export:', err);
+      setToastMsg('Failed to export CSV. Please try again.');
     } finally {
       setExporting(false);
-      setTimeout(() => setToast(null), 4000);
+      setTimeout(() => setToastMsg(null), 4000);
     }
   };
 
@@ -422,19 +425,9 @@ export default function TenantDashboard() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-base)' }}>
           <div className="live-dot"><div className="live-dot-circle" />LIVE</div>
-          <select
-            className="form-select"
-            style={{ width: 'auto', height: 32, fontSize: 12, padding: '0 28px 0 10px' }}
-            value={exportMonth}
-            onChange={e => setExportMonth(e.target.value)}
-          >
-            {monthOptions.map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
           <button
             className="btn btn-secondary btn-sm"
-            onClick={handleExportCsv}
+            onClick={() => setShowExportModal(true)}
             disabled={exporting}
             style={{ minWidth: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
           >
@@ -448,18 +441,18 @@ export default function TenantDashboard() {
       </div>
 
       {/* Toast notification */}
-      {toast && (
+      {toastMsg && (
         <div style={{
           position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
           padding: '12px 20px', borderRadius: 'var(--radius-md)',
-          background: toast.type === 'success' ? 'var(--color-success-bg, #1a3a2a)' : 'var(--color-danger-bg, #3a1a1a)',
-          color: toast.type === 'success' ? 'var(--color-success)' : 'var(--color-danger)',
-          border: `1px solid ${toast.type === 'success' ? 'var(--color-success)' : 'var(--color-danger)'}`,
+          background: toastMsg.startsWith('Failed') ? 'var(--color-danger-bg, #3a1a1a)' : 'var(--color-success-bg, #1a3a2a)',
+          color: toastMsg.startsWith('Failed') ? 'var(--color-danger)' : 'var(--color-success)',
+          border: `1px solid ${toastMsg.startsWith('Failed') ? 'var(--color-danger)' : 'var(--color-success)'}`,
           fontSize: 13, fontWeight: 500,
           boxShadow: 'var(--shadow-lg)',
           animation: 'fadeIn 0.2s ease-out',
         }}>
-          {toast.type === 'success' ? '✅' : '❌'} {toast.message}
+          {toastMsg.startsWith('Failed') ? '❌' : '✅'} {toastMsg}
         </div>
       )}
 
@@ -635,6 +628,39 @@ export default function TenantDashboard() {
         )}
 
       </div>
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="modal-overlay" onClick={() => setShowExportModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Export CSV</h2>
+              <button className="modal-close" onClick={() => setShowExportModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Select Month</label>
+                <select
+                  className="form-select"
+                  value={exportMonth}
+                  onChange={e => setExportMonth(e.target.value)}
+                  style={{ width: '100%' }}
+                >
+                  {monthOptions.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowExportModal(false)} disabled={exporting}>Cancel</button>
+              <button className="btn" onClick={handleExportCsv} disabled={exporting}>
+                {exporting ? 'Exporting...' : 'Download CSV'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

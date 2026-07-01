@@ -7,7 +7,8 @@ import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.common.enums.LicenseStatus;
 import com.vcs.management.tenant.entity.Tenant;
 import com.vcs.management.tenant.repository.TenantRepository;
-import com.vcs.management.usage.service.UsageApiService;
+import com.vcs.management.usage.entity.BillingMetric;
+import com.vcs.management.usage.repository.BillingMetricRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,10 +18,13 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.UUID;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Service for generating usage reports as CSV.
- * Reads daily counters from Redis and formats as CSV data.
+ * Reads daily counters from PostgreSQL and formats as CSV data.
  */
 @Service
 public class ReportService {
@@ -30,12 +34,12 @@ public class ReportService {
     private static final DateTimeFormatter DISPLAY_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final String CSV_DATA_HEADER = "Date,Received,Accepted,Dropped,Overflow\n";
 
-    private final UsageApiService usageApiService;
+    private final BillingMetricRepository billingMetricRepository;
     private final TenantRepository tenantRepository;
     private final LicenseRepository licenseRepository;
 
-    public ReportService(UsageApiService usageApiService, TenantRepository tenantRepository, LicenseRepository licenseRepository) {
-        this.usageApiService = usageApiService;
+    public ReportService(BillingMetricRepository billingMetricRepository, TenantRepository tenantRepository, LicenseRepository licenseRepository) {
+        this.billingMetricRepository = billingMetricRepository;
         this.tenantRepository = tenantRepository;
         this.licenseRepository = licenseRepository;
     }
@@ -78,13 +82,19 @@ public class ReportService {
 
         long totalReceived = 0, totalAccepted = 0, totalDropped = 0, totalOverflow = 0;
 
+        String monthPrefix = month.replace("-", ""); // "202606"
+        List<BillingMetric> monthlyMetrics = billingMetricRepository.findByTenantIdAndWindowTypeAndWindowKeyStartingWith(tenantId, "1d", monthPrefix);
+        Map<String, BillingMetric> metricMap = monthlyMetrics.stream()
+                .collect(Collectors.toMap(BillingMetric::getWindowKey, m -> m));
+
         for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
             String dayKey = date.format(DAY_KEY_FORMATTER);
             String displayDate = date.format(DISPLAY_DATE_FORMATTER);
 
-            long received = usageApiService.getDailyCounter(tenantId, "received", dayKey);
-            long accepted = usageApiService.getDailyCounter(tenantId, "accepted", dayKey);
-            long dropped = usageApiService.getDailyCounter(tenantId, "dropped", dayKey);
+            BillingMetric dailyMetric = metricMap.get(dayKey);
+            long received = dailyMetric != null ? dailyMetric.getReceived() : 0;
+            long accepted = dailyMetric != null ? dailyMetric.getAccepted() : 0;
+            long dropped = dailyMetric != null ? dailyMetric.getDropped() : 0;
             
             long overflow = 0;
             if (accepted > dailyBaseCapacity) {
