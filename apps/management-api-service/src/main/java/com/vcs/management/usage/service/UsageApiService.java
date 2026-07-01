@@ -57,8 +57,8 @@ public class UsageApiService {
             received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
         }
 
-        // Convert events-per-minute to events-per-second
-        return received / 60;
+        // Convert events-per-minute to events-per-second, using Math.ceil to avoid 0 EPS when events < 60
+        return (long) Math.ceil(received / 60.0);
     }
 
     /**
@@ -123,7 +123,7 @@ public class UsageApiService {
             String prevWindow = getMinuteWindow(now - 60);
             received = getCounterValue(tenantId.toString(), "received", "1m", prevWindow);
         }
-        return received / 60;
+        return (long) Math.ceil(received / 60.0);
     }
 
     // ── Daily Totals ────────────────────────────────────────────────────
@@ -399,19 +399,19 @@ public class UsageApiService {
 
     private String getMinuteWindow(long unixSeconds) {
         return Instant.ofEpochSecond(unixSeconds)
-                .atZone(ZoneId.systemDefault())
+                .atZone(java.time.ZoneOffset.UTC)
                 .format(MINUTE_FORMATTER);
     }
 
     private String getDisplayMinuteWindow(long unixSeconds) {
         return Instant.ofEpochSecond(unixSeconds)
-                .atZone(ZoneId.systemDefault())
+                .atZone(java.time.ZoneOffset.UTC)
                 .format(DISPLAY_MINUTE_FORMATTER);
     }
 
     private String getFloorMinuteWindow(long unixSeconds, int minuteInterval) {
         java.time.ZonedDateTime zdt = Instant.ofEpochSecond(unixSeconds)
-                .atZone(ZoneId.systemDefault());
+                .atZone(java.time.ZoneOffset.UTC);
         int minute = zdt.getMinute();
         int flooredMinute = (minute / minuteInterval) * minuteInterval;
         return zdt.withMinute(flooredMinute).withSecond(0).withNano(0)
@@ -420,7 +420,7 @@ public class UsageApiService {
 
     private long getFlooredSeconds(long unixSeconds, int minuteInterval) {
         java.time.ZonedDateTime zdt = Instant.ofEpochSecond(unixSeconds)
-                .atZone(ZoneId.systemDefault());
+                .atZone(java.time.ZoneOffset.UTC);
         int minute = zdt.getMinute();
         int flooredMinute = (minute / minuteInterval) * minuteInterval;
         return zdt.withMinute(flooredMinute).withSecond(0).withNano(0).toEpochSecond();
@@ -428,7 +428,7 @@ public class UsageApiService {
 
     public String getDayWindow(long unixSeconds) {
         return Instant.ofEpochSecond(unixSeconds)
-                .atZone(ZoneId.systemDefault())
+                .atZone(java.time.ZoneOffset.UTC)
                 .format(DAY_FORMATTER);
     }
 }

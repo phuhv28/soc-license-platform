@@ -327,16 +327,16 @@ func incrementDimension(pipe redis.Pipeliner, tenantId, dimType, dimValue, windo
 }
 
 func getMinuteWindow(unixSeconds int64) string {
-	return time.Unix(unixSeconds, 0).Format("200601021504")
+	return time.Unix(unixSeconds, 0).UTC().Format("200601021504")
 }
 
 func getFloorMinuteWindow(unixSeconds int64, minuteInterval int) string {
-	t := time.Unix(unixSeconds, 0)
+	t := time.Unix(unixSeconds, 0).UTC()
 	flooredMinute := (t.Minute() / minuteInterval) * minuteInterval
-	t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), flooredMinute, 0, 0, t.Location())
+	t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), flooredMinute, 0, 0, time.UTC)
 	return t.Format("200601021504")
 }
 
 func getDayWindow(unixSeconds int64) string {
-	return time.Unix(unixSeconds, 0).Format("20060102")
+	return time.Unix(unixSeconds, 0).UTC().Format("20060102")
 }

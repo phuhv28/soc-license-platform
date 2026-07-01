@@ -335,11 +335,39 @@ export default function TenantDashboard() {
     return () => clearInterval(interval);
   }, [tenantId, historyWindow]);
 
+  // ── Export CSV state ─────────────────────────────────────────────────
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [exportMonth, setExportMonth] = useState(currentMonth);
+  const [exporting, setExporting] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Generate last 12 months for picker
+  const monthOptions = useMemo(() => {
+    const opts: string[] = [];
+    const d = new Date();
+    for (let i = 0; i < 12; i++) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      opts.push(`${y}-${m}`);
+      d.setMonth(d.getMonth() - 1);
+    }
+    return opts;
+  }, []);
+
   const handleExportCsv = async () => {
     if (!tenantId) return;
-    const now = new Date();
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    await reportsApi.downloadUsageCsv(tenantId, month);
+    setExporting(true);
+    setToast(null);
+    try {
+      const filename = await reportsApi.downloadUsageCsv(tenantId, exportMonth);
+      setToast({ message: `Downloaded ${filename}`, type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Export failed', type: 'error' });
+    } finally {
+      setExporting(false);
+      setTimeout(() => setToast(null), 4000);
+    }
   };
 
   const activeLicense = licenses.find(l => l.status === 'ACTIVE');
@@ -374,9 +402,46 @@ export default function TenantDashboard() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-base)' }}>
           <div className="live-dot"><div className="live-dot-circle" />LIVE</div>
-          <button className="btn btn-secondary btn-sm" onClick={handleExportCsv}>📥 Export CSV</button>
+          <select
+            className="form-select"
+            style={{ width: 'auto', height: 32, fontSize: 12, padding: '0 28px 0 10px' }}
+            value={exportMonth}
+            onChange={e => setExportMonth(e.target.value)}
+          >
+            {monthOptions.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleExportCsv}
+            disabled={exporting}
+            style={{ minWidth: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+          >
+            {exporting ? (
+              <><div className="loading-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Exporting...</>
+            ) : (
+              <>📥 Export CSV</>
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          padding: '12px 20px', borderRadius: 'var(--radius-md)',
+          background: toast.type === 'success' ? 'var(--color-success-bg, #1a3a2a)' : 'var(--color-danger-bg, #3a1a1a)',
+          color: toast.type === 'success' ? 'var(--color-success)' : 'var(--color-danger)',
+          border: `1px solid ${toast.type === 'success' ? 'var(--color-success)' : 'var(--color-danger)'}`,
+          fontSize: 13, fontWeight: 500,
+          boxShadow: 'var(--shadow-lg)',
+          animation: 'fadeIn 0.2s ease-out',
+        }}>
+          {toast.type === 'success' ? '✅' : '❌'} {toast.message}
+        </div>
+      )}
 
       <div className="page-body">
 

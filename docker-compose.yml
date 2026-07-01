@@ -63,6 +63,7 @@ services:
       POSTGRES_DB: soc_license
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      TZ: Asia/Ho_Chi_Minh
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,6 +139,7 @@ services:
       KAFKA_BROKERS: soc-kafka:9092
       PORT: 8080
       BURST_MULTIPLIER: 3
+      TZ: Asia/Ho_Chi_Minh
     depends_on:
       redis:
         condition: service_healthy

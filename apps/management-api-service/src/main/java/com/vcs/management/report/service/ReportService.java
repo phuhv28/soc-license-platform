@@ -28,7 +28,7 @@ public class ReportService {
     private static final Logger log = LoggerFactory.getLogger(ReportService.class);
     private static final DateTimeFormatter DAY_KEY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter DISPLAY_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final String CSV_HEADER = "Date,Received,Accepted,Dropped,Overflow\n";
+    private static final String CSV_DATA_HEADER = "Date,Received,Accepted,Dropped,Overflow\n";
 
     private final UsageApiService usageApiService;
     private final TenantRepository tenantRepository;
@@ -66,14 +66,17 @@ public class ReportService {
         LocalDate startDate = yearMonth.atDay(1);
         LocalDate endDate = yearMonth.atEndOfMonth();
 
-        // Don't generate future data beyond today
-        LocalDate today = LocalDate.now();
-        if (endDate.isAfter(today)) {
-            endDate = today;
-        }
-
         StringBuilder csv = new StringBuilder();
-        csv.append(CSV_HEADER);
+
+        // Metadata header for context
+        csv.append("# Tenant: ").append(tenant.getName()).append('\n');
+        csv.append("# Tenant ID: ").append(tenantId).append('\n');
+        csv.append("# Period: ").append(month).append('\n');
+        csv.append("# EPS Quota: ").append(epsQuota).append('\n');
+        csv.append("# Generated: ").append(java.time.Instant.now()).append('\n');
+        csv.append(CSV_DATA_HEADER);
+
+        long totalReceived = 0, totalAccepted = 0, totalDropped = 0, totalOverflow = 0;
 
         for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
             String dayKey = date.format(DAY_KEY_FORMATTER);
@@ -88,12 +91,24 @@ public class ReportService {
                 overflow = accepted - dailyBaseCapacity;
             }
 
+            totalReceived += received;
+            totalAccepted += accepted;
+            totalDropped += dropped;
+            totalOverflow += overflow;
+
             csv.append(displayDate).append(',')
                .append(received).append(',')
                .append(accepted).append(',')
                .append(dropped).append(',')
                .append(overflow).append('\n');
         }
+
+        // Summary row
+        csv.append("TOTAL,")
+           .append(totalReceived).append(',')
+           .append(totalAccepted).append(',')
+           .append(totalDropped).append(',')
+           .append(totalOverflow).append('\n');
 
         log.info("Generated CSV report for tenant {} ({}), month {}",
                 tenant.getName(), tenantId, month);
@@ -105,7 +120,12 @@ public class ReportService {
      * Generate a filename for the CSV download.
      */
     public String generateFilename(UUID tenantId, String month) {
-        return String.format("usage_%s_%s.csv", tenantId, month);
+        // Include tenant name in filename for easy identification
+        String tenantName = tenantRepository.findById(tenantId)
+                .map(Tenant::getName)
+                .orElse("unknown");
+        String safeName = tenantName.replaceAll("[^a-zA-Z0-9_-]", "_").toLowerCase();
+        return String.format("usage_%s_%s_%s.csv", safeName, tenantId.toString().substring(0, 8), month);
     }
 
     private YearMonth parseMonth(String month) {
