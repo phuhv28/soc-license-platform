@@ -63,6 +63,7 @@ services:
       POSTGRES_DB: soc_license
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      KAFKA_BROKERS: soc-kafka:9092
       TZ: Asia/Ho_Chi_Minh
     depends_on:
       postgres:

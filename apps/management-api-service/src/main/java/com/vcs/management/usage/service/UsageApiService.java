@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import com.vcs.management.usage.repository.BillingMetricRepository;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -30,9 +31,11 @@ public class UsageApiService {
     private static final DateTimeFormatter DISPLAY_MINUTE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
 
     private final StringRedisTemplate redisTemplate;
+    private final BillingMetricRepository billingMetricRepository;
 
-    public UsageApiService(StringRedisTemplate redisTemplate) {
+    public UsageApiService(StringRedisTemplate redisTemplate, BillingMetricRepository billingMetricRepository) {
         this.redisTemplate = redisTemplate;
+        this.billingMetricRepository = billingMetricRepository;
     }
 
     // ── Current EPS ─────────────────────────────────────────────────────
@@ -232,10 +235,30 @@ public class UsageApiService {
         try {
             String key = String.format("usage:%s:%s:%s:%s", tenantId, type, window, timeKey);
             String value = redisTemplate.opsForValue().get(key);
-            return value != null ? Long.parseLong(value) : 0;
+            if (value != null) {
+                return Long.parseLong(value);
+            }
         } catch (Exception e) {
             log.warn("Failed to read counter {}:{}:{}:{}: {}", tenantId, type, window, timeKey, e.getMessage());
-            return 0;
+        }
+
+        // Fallback to DB
+        return getCounterValueFromDb(tenantId, type, window, timeKey);
+    }
+
+    private long getCounterValueFromDb(String tenantId, String type, String window, String timeKey) {
+        try {
+            UUID tid = UUID.fromString(tenantId);
+            return billingMetricRepository.findByTenantIdAndWindowTypeAndWindowKey(tid, window, timeKey)
+                    .map(metric -> {
+                        if ("received".equals(type)) return metric.getReceived();
+                        if ("accepted".equals(type)) return metric.getAccepted();
+                        if ("dropped".equals(type)) return metric.getDropped();
+                        return 0L;
+                    }).orElse(0L);
+        } catch (Exception e) {
+            log.error("DB fallback failed for {}:{}:{}:{}", tenantId, type, window, timeKey, e.getMessage());
+            return 0L;
         }
     }
 

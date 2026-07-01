@@ -217,3 +217,22 @@ CREATE TRIGGER trg_alerts_updated_at
 BEFORE UPDATE ON alerts
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE billing_metrics (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   UUID NOT NULL,
+    window_type VARCHAR(10) NOT NULL,
+    window_key  VARCHAR(20) NOT NULL,
+    received    BIGINT NOT NULL DEFAULT 0,
+    accepted    BIGINT NOT NULL DEFAULT 0,
+    dropped     BIGINT NOT NULL DEFAULT 0,
+
+    CONSTRAINT fk_billing_metrics_tenant
+        FOREIGN KEY (tenant_id)
+        REFERENCES tenants (tenant_id)
+        ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX idx_billing_tenant_window
+    ON billing_metrics (tenant_id, window_type, window_key);
+

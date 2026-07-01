@@ -55,7 +55,7 @@ func main() {
 	}
 	defer kafkaProducer.Close()
 
-	metricsManager := newMetricsManager(redisClient, burstMultiplier, logger)
+	metricsManager := newMetricsManager(redisClient, kafkaProducer, burstMultiplier, logger)
 	metricsManager.Start()
 	defer metricsManager.Stop()
 

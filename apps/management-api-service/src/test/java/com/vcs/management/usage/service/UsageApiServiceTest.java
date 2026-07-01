@@ -10,6 +10,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import com.vcs.management.usage.repository.BillingMetricRepository;
 
 import java.util.List;
 import java.util.UUID;
@@ -23,13 +24,14 @@ class UsageApiServiceTest {
 
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private ValueOperations<String, String> valueOps;
+    @Mock private BillingMetricRepository billingMetricRepository;
 
     private UsageApiService usageApiService;
     private UUID tenantId;
 
     @BeforeEach
     void setUp() {
-        usageApiService = new UsageApiService(redisTemplate);
+        usageApiService = new UsageApiService(redisTemplate, billingMetricRepository);
         tenantId = UUID.randomUUID();
     }
 

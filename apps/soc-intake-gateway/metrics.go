@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"encoding/json"
+
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -88,16 +90,19 @@ type metricsManager struct {
 	statesMu sync.RWMutex
 	states   map[string]*tenantState
 
+	kafkaProducer *kafkaProducer
+
 	burstMultiplier float64
 
 	cancel context.CancelFunc
 }
 
-func newMetricsManager(client *redis.Client, burstMultiplier float64, logger *zap.Logger) *metricsManager {
+func newMetricsManager(client *redis.Client, kafkaProducer *kafkaProducer, burstMultiplier float64, logger *zap.Logger) *metricsManager {
 	return &metricsManager{
-		client: client,
-		logger: logger,
-		states: make(map[string]*tenantState),
+		client:          client,
+		kafkaProducer:   kafkaProducer,
+		logger:          logger,
+		states:          make(map[string]*tenantState),
 		burstMultiplier: burstMultiplier,
 	}
 }
@@ -283,6 +288,21 @@ func (m *metricsManager) flushToRedis() {
 
 		for ls, mStats := range currentMetrics.LogSourceMetrics {
 			incrementDimension(pipe, tenantID, "logsource", ls, window1m, window5m, window15m, window1d, mStats.Received, mStats.Accepted, mStats.Dropped)
+		}
+
+		// Produce to Kafka
+		if m.kafkaProducer != nil {
+			deltaMsg := map[string]interface{}{
+				"tenant_id":   tenantID,
+				"window_type": "1m",
+				"window_key":  window1m,
+				"received":    received,
+				"accepted":    accepted,
+				"dropped":     dropped,
+			}
+			if msgBytes, err := json.Marshal(deltaMsg); err == nil {
+				m.kafkaProducer.ProduceBillingMetric(context.Background(), tenantID, msgBytes)
+			}
 		}
 	}
 

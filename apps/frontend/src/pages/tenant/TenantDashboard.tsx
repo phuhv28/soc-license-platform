@@ -14,6 +14,7 @@ import {
 import { licensesApi, type License } from '../../api/licenses';
 import { alertsApi, type Alert } from '../../api/alerts';
 import { reportsApi } from '../../api/reports';
+import { useAuth } from '../../context/AuthContext';
 
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -302,6 +303,7 @@ function DimensionTable({ title, tenantId, dimension, window: win, colors }: Dim
 
 export default function TenantDashboard() {
   const { tenantId } = useParams<{ tenantId: string }>();
+  const { isAdmin } = useAuth();
   const [usage, setUsage]     = useState<UsageResponse | null>(null);
   const [history, setHistory] = useState<UsageHistoryResponse | null>(null);
   const [licenses, setLicenses] = useState<License[]>([]);
@@ -371,6 +373,24 @@ export default function TenantDashboard() {
   };
 
   const activeLicense = licenses.find(l => l.status === 'ACTIVE');
+
+  const handleResolveAlert = async (alertId: string) => {
+    try {
+      await alertsApi.resolve(alertId);
+      setAlerts(prev => prev.filter(a => a.alertId !== alertId));
+    } catch (err) {
+      console.error('Failed to resolve alert:', err);
+    }
+  };
+
+  const handleIgnoreAlert = async (alertId: string) => {
+    try {
+      await alertsApi.ignore(alertId);
+      setAlerts(prev => prev.filter(a => a.alertId !== alertId));
+    } catch (err) {
+      console.error('Failed to ignore alert:', err);
+    }
+  };
 
   if (loading) {
     return (
@@ -579,6 +599,12 @@ export default function TenantDashboard() {
                         <span>{new Date(alert.triggeredAt).toLocaleString()}</span>
                       </div>
                     </div>
+                    {isAdmin && (
+                      <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+                        <button className="btn btn-sm" onClick={() => handleResolveAlert(alert.alertId)} style={{ fontSize: '11px', padding: '4px 8px' }}>Resolve</button>
+                        <button className="btn btn-sm btn-secondary" onClick={() => handleIgnoreAlert(alert.alertId)} style={{ fontSize: '11px', padding: '4px 8px' }}>Ignore</button>
+                      </div>
+                    )}
                   </div>
                 ))
               ) : (

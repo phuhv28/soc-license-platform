@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.util.List;
 import java.util.UUID;
@@ -40,12 +41,14 @@ public class AlertController {
         return ApiResponse.success(alertService.getAlert(alertId));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{alertId}/resolve")
     public ResponseEntity<ApiResponse<AlertResponse>> resolveAlert(@PathVariable UUID alertId) {
         AlertResponse response = alertService.resolveAlert(alertId);
         return ResponseEntity.ok(ApiResponse.success("Alert resolved successfully", response));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{alertId}/ignore")
     public ResponseEntity<ApiResponse<AlertResponse>> ignoreAlert(@PathVariable UUID alertId) {
         AlertResponse response = alertService.ignoreAlert(alertId);

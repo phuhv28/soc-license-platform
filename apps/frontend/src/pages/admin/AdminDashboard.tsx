@@ -58,6 +58,24 @@ export default function AdminDashboard() {
     return matchName && matchStatus;
   });
 
+  const handleResolveAlert = async (alertId: string) => {
+    try {
+      await alertsApi.resolve(alertId);
+      setAlerts(prev => prev.filter(a => a.alertId !== alertId));
+    } catch (err) {
+      console.error('Failed to resolve alert:', err);
+    }
+  };
+
+  const handleIgnoreAlert = async (alertId: string) => {
+    try {
+      await alertsApi.ignore(alertId);
+      setAlerts(prev => prev.filter(a => a.alertId !== alertId));
+    } catch (err) {
+      console.error('Failed to ignore alert:', err);
+    }
+  };
+
   return (
     <>
       {/* Page Header */}
@@ -93,6 +111,40 @@ export default function AdminDashboard() {
       </div>
 
       <div className="page-body">
+        {/* System Alerts */}
+        {alerts.length > 0 && (
+          <div className="card" style={{ marginBottom: 'var(--space-xl)' }}>
+            <div className="card-header">
+              <h3>System Alerts</h3>
+              <span className="badge danger">{alerts.length}</span>
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {alerts.map(alert => {
+                const tenantName = summary?.tenants.find(t => t.tenantId === alert.tenantId)?.tenantName || alert.tenantId;
+                return (
+                  <div key={alert.alertId} className="alert-item">
+                    <span className={`badge ${alert.severity === 'CRITICAL' ? 'danger' : alert.severity === 'WARNING' ? 'warning' : 'info'}`}>
+                      {alert.severity}
+                    </span>
+                    <div className="alert-item-content">
+                      <div className="alert-item-message">
+                        <strong>[{tenantName}]</strong> {alert.message}
+                      </div>
+                      <div className="alert-item-meta">
+                        <span>{new Date(alert.triggeredAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+                      <button className="btn btn-sm" onClick={() => handleResolveAlert(alert.alertId)} style={{ fontSize: '11px', padding: '4px 8px' }}>Resolve</button>
+                      <button className="btn btn-sm btn-secondary" onClick={() => handleIgnoreAlert(alert.alertId)} style={{ fontSize: '11px', padding: '4px 8px' }}>Ignore</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Filter Bar */}
         <div className="filter-bar">
           <input
