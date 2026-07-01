@@ -1,8 +1,8 @@
 package com.vcs.management.alert.repository;
 
 import com.vcs.management.alert.entity.Alert;
-import com.vcs.management.common.enums.AlertStatus;
-import com.vcs.management.common.enums.AlertType;
+import com.vcs.management.alert.enums.AlertStatus;
+import com.vcs.management.alert.enums.AlertType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;

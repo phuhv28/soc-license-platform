@@ -1,4 +1,4 @@
-package com.vcs.management.license.scheduler;
+package com.vcs.management.alert.scheduler;
 
 import com.vcs.management.alert.service.AlertService;
 import com.vcs.management.common.enums.LicenseStatus;

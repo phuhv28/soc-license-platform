@@ -2,8 +2,8 @@ package com.vcs.management.alert.controller;
 
 import com.vcs.management.alert.dto.AlertResponse;
 import com.vcs.management.alert.service.AlertService;
-import com.vcs.management.common.enums.AlertStatus;
-import com.vcs.management.common.enums.AlertType;
+import com.vcs.management.alert.enums.AlertStatus;
+import com.vcs.management.alert.enums.AlertType;
 import com.vcs.management.common.response.ApiResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

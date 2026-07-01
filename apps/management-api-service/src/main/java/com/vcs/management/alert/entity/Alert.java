@@ -1,8 +1,8 @@
 package com.vcs.management.alert.entity;
 
-import com.vcs.management.common.enums.AlertSeverity;
-import com.vcs.management.common.enums.AlertStatus;
-import com.vcs.management.common.enums.AlertType;
+import com.vcs.management.alert.enums.AlertSeverity;
+import com.vcs.management.alert.enums.AlertStatus;
+import com.vcs.management.alert.enums.AlertType;
 import com.vcs.management.license.entity.License;
 import com.vcs.management.tenant.entity.Tenant;
 import jakarta.persistence.Column;

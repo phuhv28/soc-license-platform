@@ -7,6 +7,7 @@ import com.vcs.management.alert.entity.Alert;
 import com.vcs.management.alert.repository.AlertRepository;
 import com.vcs.management.audit.service.AuditLogService;
 import com.vcs.management.common.enums.*;
+import com.vcs.management.alert.enums.*;
 import com.vcs.management.common.exception.ResourceNotFoundException;
 import com.vcs.management.license.repository.LicenseRepository;
 import com.vcs.management.tenant.entity.Tenant;

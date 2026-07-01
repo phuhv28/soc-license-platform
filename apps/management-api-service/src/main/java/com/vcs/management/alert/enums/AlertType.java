@@ -1,4 +1,4 @@
-package com.vcs.management.common.enums;
+package com.vcs.management.alert.enums;
 
 public enum AlertType {
     LICENSE_EXPIRING_SOON,

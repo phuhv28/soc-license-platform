@@ -1,9 +1,9 @@
 package com.vcs.management.alert.dto;
 
 import com.vcs.management.alert.entity.Alert;
-import com.vcs.management.common.enums.AlertSeverity;
-import com.vcs.management.common.enums.AlertStatus;
-import com.vcs.management.common.enums.AlertType;
+import com.vcs.management.alert.enums.AlertSeverity;
+import com.vcs.management.alert.enums.AlertStatus;
+import com.vcs.management.alert.enums.AlertType;
 
 import java.time.Instant;
 import java.util.UUID;
