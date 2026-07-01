@@ -76,12 +76,14 @@ public class KeycloakAdminService {
         user.setFirstName(tenantName);
         user.setAttributes(Map.of("tenantId", List.of(tenantId)));
 
-        RealmResource realmResource = keycloak.realm(TARGET_REALM);
-        UsersResource usersResource = realmResource.users();
-
-        try (Response response = usersResource.create(user)) {
-            if (response.getStatus() == 201) {
-                String userId = CreatedResponseUtil.getCreatedId(response);
+        try {
+            RealmResource realmResource = keycloak.realm(TARGET_REALM);
+            UsersResource usersResource = realmResource.users();
+            
+            try (Response response = usersResource.create(user)) {
+                if (response.getStatus() == 201) {
+                    String path = response.getLocation().getPath();
+                    String userId = path.substring(path.lastIndexOf('/') + 1);
                 log.info("Created Keycloak user with id: {}", userId);
 
                 UserResource userResource = usersResource.get(userId);
@@ -96,7 +98,6 @@ public class KeycloakAdminService {
                 // Assign TENANT role
                 RoleRepresentation tenantRole = realmResource.roles().get(TENANT_ROLE).toRepresentation();
                 userResource.roles().realmLevel().add(Collections.singletonList(tenantRole));
-
                 // Force update attributes
                 UserRepresentation createdUser = userResource.toRepresentation();
                 createdUser.singleAttribute("tenantId", tenantId);
@@ -106,6 +107,7 @@ public class KeycloakAdminService {
             } else {
                 log.error("Failed to create user. Status: {}, Reason: {}", response.getStatus(), response.getStatusInfo().getReasonPhrase());
             }
+            } // close inner try with resources
         } catch (Exception e) {
             log.error("Exception while creating Keycloak user", e);
         }
