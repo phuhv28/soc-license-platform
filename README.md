@@ -14,7 +14,6 @@ A multi-tenant SOC/SIEM platform for managing EPS (Events Per Second) licenses, 
 - [Database Schema](#database-schema)
 - [API Reference](#api-reference)
 - [Getting Started](#getting-started)
-- [Testing](#testing)
 - [Manual Testing Guide](#manual-testing-guide)
 
 ---
@@ -45,15 +44,20 @@ The platform operates on a **Control Plane / Data Plane** split architecture. He
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                               DATA PLANE                                     │
 │                                                                              │
-│  ┌──────────────┐     ┌──────────────────────────┐          ▲               │
-│  │Event Producer│────>│   Collector Service       │──────────┘               │
-│  │(Mock Agent)  │     │   :8081                   │                          │
-│  └──────────────┘     │                          │                          │
-│                       │  • Receive batch events  │     ┌──────────────────┐  │
-│                       │  • Read quota from Redis │────>│ Mock Downstream  │  │
-│                       │  • Token bucket enforce  │     │ (placeholder)    │  │
-│                       │  • Update EPS counters   │     └──────────────────┘  │
-│                       └──────────────────────────┘                           │
+│  ┌──────────────┐     ┌─────────┐      ┌──────────────────────────┐          │
+│  │Event Producer│────>│ HAProxy │─────>│    SOC Intake Gateway    │          │
+│  │(Mock Agent)  │     │ :4318   │      │    :8080 (internal)      │          │
+│  └──────────────┘     └─────────┘      │                          │          │
+│                                        │  • Receive log events    │          │
+│                                        │  • Token bucket enforce  │          │
+│                                        │  • Update EPS counters   │          │
+│                                        └─────────────┬────────────┘          │
+│                                                      │                       │
+│                                                      ▼                       │
+│                                        ┌──────────────────────────┐          │
+│                                        │       Apache Kafka       │          │
+│                                        │       :9092              │          │
+│                                        └──────────────────────────┘          │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,62 +71,44 @@ Admin (Frontend) → POST /api/v1/licenses         → PostgreSQL (licenses tabl
                                                   → Redis SET quota:{tenantId} = epsQuota
 ```
 
-Khi admin tạo license, hệ thống **tự động sync EPS quota vào Redis** dưới key `quota:{tenantId}`. Đây là cầu nối giữa Control Plane và Data Plane — collector-service chỉ cần đọc Redis, không cần gọi API sang management-api-service.
+Khi admin tạo license, hệ thống **tự động sync EPS quota vào Redis** dưới key `quota:{tenantId}`. Đây là cầu nối giữa Control Plane và Data Plane — SOC Intake Gateway chỉ cần kiểm tra quota thông qua Redis và dùng Lua script để quản lý tokens.
 
 #### 2. Event Producer gửi events (Data Plane)
 
 ```
-Event Producer → POST /api/v1/collector/events/batch → Collector Service
-                 {
-                   "tenantId": "uuid",
-                   "events": [{ eventId, eventType, timestamp, payload, metadata }, ...]
-                 }
+Event Producer → POST /api/v1/logs → HAProxy → SOC Intake Gateway
+Headers:
+  X-Tenant-ID: "uuid"
+  X-Agent-Name: "agent-1"
+Body:
+  [{ "log.source": "firewall", "timestamp": "...", "payload": {...} }]
 ```
 
 Event Producer mô phỏng agent/sensor thực tế, gửi batch events liên tục theo target EPS đã cấu hình. Hỗ trợ multi-tenant qua biến `TENANT_IDS`.
 
-#### 3. Collector xử lý events (Data Plane — 4 Rules)
+#### 3. Intake Gateway xử lý events (Data Plane)
 
-```
-Rule 1: Redis GET quota:{tenantId}
-        → Không có quota? → DROP ALL → ProcessingDecision = NO_ACTIVE_LICENSE
-
-Rule 2: Token Bucket kiểm tra
-        → Tính available tokens = old_tokens + (elapsed_seconds × quota_eps)
-        → acceptableCount = min(eventCount, availableTokens)
-        → Vượt quota? → DROP phần vượt → ProcessingDecision = OVER_QUOTA
-
-Rule 3: Validate từng event (eventId, tenantId, eventType, timestamp, payload)
-        → Invalid? → DROP → ProcessingDecision = PARTIAL_VALIDATION / ALL_INVALID
-
-Rule 4: Cập nhật usage counters (LUÔN LUÔN, kể cả khi drop hết)
-        → Redis INCR usage:{tenantId}:received:1m:{yyyyMMddHHmm}
-        → Redis INCR usage:{tenantId}:accepted:1m:{yyyyMMddHHmm}
-        → Redis INCR usage:{tenantId}:dropped:1m:{yyyyMMddHHmm}
-        → Redis INCR usage:{tenantId}:*:1d:{yyyyMMdd}
-```
-
-**Token Bucket Algorithm:**
-- Capacity = quota EPS (ví dụ 100 tokens)
-- Refill rate = quota EPS tokens/giây
-- Mỗi event tiêu thụ 1 token
-- State lưu trong Redis: `bucket:{tenantId}:tokens` + `bucket:{tenantId}:last_refill_epoch_ms`
+1. **Token Rate Limiting (Dynamic Prefetching Algorithm)**: 
+   - Gateway duy trì token in-memory cho từng tenant. Nếu hết, nó sẽ gọi Lua script trên Redis để xin trước một lượng `prefetch = quota * 2` (tối thiểu 50).
+   - Redis áp dụng thuật toán **Token Bucket** theo cửa sổ thời gian (`window_size = 300` giây).
+   - Tổng tokens cho phép trong 1 window: `limit = quota * burst_multiplier * window_size` (với `burst_multiplier` mặc định là 3).
+2. **Quota Check**: Trả về `429 Too Many Requests` hoặc chỉ accept số lượng hợp lệ nếu vượt quá quota.
+3. **Usage Metrics**: Lưu metrics vào in-memory và định kỳ flush vào Redis mỗi 3 giây qua Pipeline (gồm các dimensions: time window, agent, logsource).
+4. **Publish**: Các event được chấp nhận (accepted) sẽ được gửi vào Kafka topic, metrics flush vào Kafka mỗi 5 phút cho billing downstream.
 
 #### 4. Schedulers kiểm tra và tạo alerts (Control Plane)
 
 ```
-AlertTriggerScheduler (mỗi 60 giây):
+AlertTriggerScheduler (chạy mỗi phút, tại giây thứ 5: "5 * * * * *"):
   → Scan tất cả active tenants
-  → Đọc Redis: usage counters → tính currentEps = accepted_1m / 60
-  → Đọc Redis: quota:{tenantId}
-  → usagePercent = (currentEps / quota) × 100
-  → ≥ 70%?  → Tạo USAGE_70_PERCENT alert (DEDUP: chỉ tạo nếu chưa có OPEN alert)
-  → ≥ 100%? → Tạo USAGE_100_PERCENT alert
+  → Đọc API Usage tính % sử dụng của phút trước (previous minute)
+  → ≥ 70%?  → Tạo USAGE_70_PERCENT / USAGE_100_PERCENT alert
   → < 70%?  → Auto-resolve OPEN alerts
 
-LicenseExpirationScheduler (mỗi ngày 8h sáng):
-  → Query licenses: status=ACTIVE AND endDate BETWEEN today AND today+7
+LicenseExpirationScheduler (chạy mỗi 5 phút: "0 */5 * * * *"):
+  → Query licenses: status=ACTIVE AND endDate BETWEEN today AND today+7 ngày
   → Tạo LICENSE_EXPIRING_SOON alert (DEDUP)
+  → (Có sleep 3s giữa các alert để tránh rate limit của Mailtrap)
 ```
 
 #### 5. Frontend hiển thị Dashboard (Control Plane)
@@ -140,37 +126,6 @@ Tenant Dashboard:
   → GET /api/v1/reports/usage/csv         → Export CSV báo cáo
 ```
 
-#### 6. Data Flow Diagram
-
-```
-                    ┌─────────────────┐
-                    │  Event Producer  │
-                    │   (Mock Agent)   │
-                    └────────┬────────┘
-                             │ POST /events/batch
-                             ▼
-                    ┌─────────────────┐        ┌───────────┐
-                    │    Collector     │───────>│   Redis   │
-                    │    Service      │<───────│           │
-                    └────────┬────────┘  R/W   │ • quota   │
-                             │                  │ • tokens  │
-                       accepted events          │ • usage   │
-                             │                  └─────┬─────┘
-                             ▼                        │ READ
-                    ┌─────────────────┐        ┌──────┴──────┐
-                    │ Mock Downstream │        │ Management  │
-                    │  (placeholder)  │        │ API Service │
-                    └─────────────────┘        └──────┬──────┘
-                                                      │ R/W
-                                               ┌──────┴──────┐
-                                               │ PostgreSQL  │
-                                               │ • tenants   │
-                                               │ • licenses  │
-                                               │ • alerts    │
-                                               │ • audit_logs│
-                                               └─────────────┘
-```
-
 ---
 
 ## Architecture
@@ -179,22 +134,17 @@ Tenant Dashboard:
 
 | Decision | Rationale |
 |---|---|
-| **Control/Data Plane split** | Collector (hot path) chỉ dùng Redis, không gọi DB → latency thấp |
-| **Redis là cầu nối** | Quota sync từ Control → Data Plane qua `quota:{tenantId}` key |
-| **Token Bucket trong Redis** | Atomic, persistent, hỗ trợ multi-instance trong tương lai |
-| **Scheduler-based alerts** | Tách alert trigger khỏi collector hot path, không ảnh hưởng throughput |
-| **Usage counters dùng Redis INCR** | Atomic, non-blocking, tự động TTL để cleanup dữ liệu cũ |
+| **Control/Data Plane split** | Intake Gateway (hot path) không gọi DB → latency thấp |
+| **Token Bucket trong Redis (Lua script)** | Atomic, persistent, hỗ trợ multi-instance (HAProxy load balancing) |
+| **Kafka Integration** | Đảm bảo reliable delivery và decoupling cho hệ thống (Data Plane) |
+| **Scheduler-based alerts** | Tách alert trigger khỏi intake hot path, không ảnh hưởng throughput |
 
 ### Mocked Components
-
-Các component production được mock trong MVP:
 
 | Production Component | Mock |
 |---|---|
 | Real Agent/Sensor | `event-producer` |
-| API Gateway | Direct HTTP calls |
-| Ingestion Gateway | Direct HTTP to collector |
-| Downstream SOC pipeline | `sendToDownstream()` placeholder |
+| Downstream SOC pipeline | Kafka Consumer placeholder (trong Data Plane thực tế) |
 
 ---
 
@@ -203,10 +153,15 @@ Các component production được mock trong MVP:
 | Service | Port | Description |
 |---|---:|---|
 | management-api-service | 8080 | Control Plane — License, Tenant, Alert, Usage, Report APIs |
-| collector-service | 8081 | Data Plane — Batch event processing, Token Bucket, EPS Counters |
+| soc-intake-gateway | 8080 (int) | Data Plane (Go) — Receive logs, Rate limit, Metrics, Publish to Kafka |
+| haproxy | 4317/4318 | Load balancer cho SOC Intake Gateway |
 | frontend | 3000 | React Dashboard — Admin & Tenant views |
-| postgres | 5432 | PostgreSQL — Tenants, Licenses, Alerts, Audit Logs |
+| postgres | 5432 | PostgreSQL — Tenants, Licenses, Alerts, Audit Logs, Keycloak DB |
 | redis | 6379 | Redis — Quota cache, Token Bucket state, EPS Counters |
+| kafka | 9092 | Apache Kafka — Message queue cho accepted logs |
+| keycloak | 8180 | Identity & Access Management |
+| prometheus | 9090 | Metrics collection |
+| grafana | 3001 | Dashboards for Metrics |
 | event-producer | — | Mock event generator (configurable EPS, multi-tenant) |
 
 ---
@@ -215,14 +170,14 @@ Các component production được mock trong MVP:
 
 | Layer | Technology |
 |---|---|
-| Backend | Java 25, Spring Boot, Spring Data JPA, Spring Data Redis |
-| Build | Maven |
+| Backend (Control) | Java 25, Spring Boot, Spring Data JPA, Spring Data Redis |
+| Backend (Data) | Go, Gin/net-http, go-redis, confluent-kafka-go |
 | Database | PostgreSQL 16 |
 | Cache/State | Redis 7 |
+| Message Broker | Apache Kafka 3.7.0 |
+| IAM | Keycloak 24.0 |
 | Frontend | React 19, TypeScript, Vite, Recharts |
-| Infra | Docker, Docker Compose |
-| API Docs | Swagger / OpenAPI (springdoc) |
-| Testing | JUnit 5, Mockito |
+| Infra & Monitoring| HAProxy, Prometheus, Grafana, Docker Compose |
 
 ---
 
@@ -230,15 +185,13 @@ Các component production được mock trong MVP:
 
 | Key Pattern | Type | TTL | Description |
 |---|---|---|---|
-| `quota:{tenantId}` | String | None | EPS quota synced from license |
-| `bucket:{tenantId}:tokens` | String | 24h | Available tokens for rate limiting |
-| `bucket:{tenantId}:last_refill_epoch_ms` | String | 24h | Last refill timestamp |
-| `usage:{tenantId}:received:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events received per minute |
-| `usage:{tenantId}:accepted:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events accepted per minute |
-| `usage:{tenantId}:dropped:1m:{yyyyMMddHHmm}` | String (counter) | 48h | Events dropped per minute |
-| `usage:{tenantId}:received:1d:{yyyyMMdd}` | String (counter) | 90d | Events received per day |
-| `usage:{tenantId}:accepted:1d:{yyyyMMdd}` | String (counter) | 90d | Events accepted per day |
-| `usage:{tenantId}:dropped:1d:{yyyyMMdd}` | String (counter) | 90d | Events dropped per day |
+| `quota:{tenantId}` | String | None | EPS quota (synced from API/Control Plane) |
+| `rl:tokens:{tenantId}:{window}`| String | 600s (10m) | Số token đã cấp trong window_size 300s hiện tại |
+| `usage:{tenantId}:*:1m:{window}` | String (counter) | 48h | Metrics (received/accepted/dropped) theo phút |
+| `usage:{tenantId}:*:5m:{window}` | String (counter) | 7 ngày | Metrics theo cửa sổ 5 phút |
+| `usage:{tenantId}:*:15m:{window}`| String (counter) | 14 ngày | Metrics theo cửa sổ 15 phút |
+| `usage:{tenantId}:*:1d:{window}` | String (counter) | 90 ngày | Metrics theo ngày |
+| `usage:{tenantId}:dim:*:{window}`| String (counter) | Giống trên | Dimensions theo agent và logsource (1m/5m/15m/1d) |
 
 ---
 
@@ -251,77 +204,28 @@ alerts (alert_id UUID PK, tenant_id FK, license_id FK nullable, alert_type, seve
 audit_logs (audit_log_id UUID PK, actor, action, resource_type, resource_id, before_value JSONB, after_value JSONB, created_at)
 ```
 
-Full schema: `apps/management-api-service/src/main/resources/db/schema_v1.sql`
-
 ---
 
 ## API Reference
 
 ### Management API (`:8080`)
 
-#### Tenant APIs
+*(CRUD endpoints cho Tenant, License, Alert, Usage)*
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/v1/tenants` | Create tenant |
-| `GET` | `/api/v1/tenants` | List all tenants |
-| `GET` | `/api/v1/tenants/{tenantId}` | Get tenant by ID |
-| `PUT` | `/api/v1/tenants/{tenantId}` | Update tenant |
-| `DELETE` | `/api/v1/tenants/{tenantId}` | Disable tenant (soft delete) |
+| `POST` | `/api/v1/licenses` | Create license |
+| `GET` | `/api/v1/alerts` | List alerts |
+| `GET` | `/api/v1/usage/summary` | Get EPS usage summary |
 
-#### License APIs
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/v1/licenses` | Create license (syncs quota to Redis) |
-| `GET` | `/api/v1/licenses` | List all licenses |
-| `GET` | `/api/v1/licenses/{licenseId}` | Get license by ID |
-| `GET` | `/api/v1/licenses/tenant/{tenantId}` | Get licenses by tenant |
-| `PUT` | `/api/v1/licenses/{licenseId}` | Update license |
-| `DELETE` | `/api/v1/licenses/{licenseId}` | Disable license (removes Redis quota) |
-| `GET` | `/api/v1/licenses/expiring-soon?days=7` | Licenses expiring within N days |
-
-#### Alert APIs
+### SOC Intake Gateway API (`HAProxy :4318` -> `Gateway :8080`)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/alerts` | List alerts (filter: `tenantId`, `status`, `alertType`) |
-| `GET` | `/api/v1/alerts/{alertId}` | Get alert by ID |
-| `PUT` | `/api/v1/alerts/{alertId}/resolve` | Resolve alert |
-| `PUT` | `/api/v1/alerts/{alertId}/ignore` | Ignore alert |
-
-#### Usage APIs
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/v1/usage/{tenantId}/current` | Current EPS, quota, usage %, daily totals |
-| `GET` | `/api/v1/usage/{tenantId}/history?hours=24` | Time-series data (1 data point/minute) |
-| `GET` | `/api/v1/usage/summary` | All tenants summary (admin dashboard) |
-
-#### Report APIs
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/v1/reports/usage/csv?tenantId=X&month=2026-06` | Download monthly CSV report |
-
-#### Other APIs
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/v1/audit-logs` | List all audit logs |
-| `GET` | `/api/v1/health` | Health check |
-
-### Collector API (`:8081`)
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/v1/collector/events/batch` | Submit event batch for processing |
-| `GET` | `/api/v1/health` | Health check |
-
-### Swagger UI
-
-- Management API: http://localhost:8080/swagger-ui.html
-- Collector Service: http://localhost:8081/swagger-ui.html
+| `POST` | `/api/v1/logs` | Gửi batch events (Yêu cầu `X-Tenant-ID` header) |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
 
 ---
 
@@ -335,7 +239,7 @@ Full schema: `apps/management-api-service/src/main/resources/db/schema_v1.sql`
 
 ```bash
 # Start all services
-docker compose up --build
+docker compose up --build -d
 
 # Stop
 docker compose down
@@ -350,44 +254,11 @@ docker compose down -v
 |---|---|
 | Frontend Dashboard | http://localhost:3000 |
 | Management API | http://localhost:8080 |
-| Collector API | http://localhost:8081 |
+| Intake Gateway (HAProxy) | http://localhost:4318 |
 | Management Swagger | http://localhost:8080/swagger-ui.html |
-| Collector Swagger | http://localhost:8081/swagger-ui.html |
-
-### Environment Variables
-
-#### Event Producer
-
-| Variable | Default | Description |
-|---|---|---|
-| `TENANT_IDS` | `tenant-a` | Comma-separated tenant IDs |
-| `EPS` | `100` | Target events per second |
-| `BATCH_SIZE` | `50` | Events per batch |
-| `COLLECTOR_URL` | `http://localhost:8081` | Collector service URL |
-
----
-
-## Testing
-
-### Unit Tests
-
-```bash
-# Management API Service (33 tests)
-cd apps/management-api-service
-./mvnw test
-
-# Collector Service (14 tests)
-cd apps/collector-service
-./mvnw test
-```
-
-### Test Coverage
-
-| Service | Test Classes | Tests | Status |
-|---|---|---:|---|
-| management-api-service | LicenseServiceTest, AlertServiceTest, UsageApiServiceTest, ReportServiceTest | 33 | ✅ All passing |
-| collector-service | CollectorServiceImplTest, UsageCounterServiceTest | 14 | ✅ All passing |
-| **Total** | **6 classes** | **47** | **✅** |
+| Grafana | http://localhost:3001 (admin/admin) |
+| Keycloak | http://localhost:8180 (admin/admin) |
+| Prometheus | http://localhost:9090 |
 
 ---
 
@@ -423,49 +294,30 @@ docker exec -it soc-redis redis-cli GET "quota:<tenant-id>"
 # Expected: "100"
 ```
 
-### 3. Send Events
+### 3. Send Logs (Data Plane)
+
+Gửi logs qua HAProxy tới Intake Gateway.
 
 ```bash
-curl -X POST http://localhost:8081/api/v1/collector/events/batch \
+curl -X POST http://localhost:4318/api/v1/logs \
   -H "Content-Type: application/json" \
-  -d '{
-    "tenantId": "<tenant-id>",
-    "events": [
-      {
-        "eventId": "evt-001",
-        "tenantId": "<tenant-id>",
-        "eventType": "firewall.connection",
-        "timestamp": "2026-06-23T10:00:00Z",
-        "payload": {"sourceIp": "10.0.0.1", "port": 443},
-        "metadata": {"agent": "agent-1"}
-      }
-    ]
-  }'
+  -H "X-Tenant-ID: <tenant-id>" \
+  -H "X-Agent-Name: agent-1" \
+  -d '[
+    {
+      "log.source": "firewall",
+      "timestamp": "2026-06-23T10:00:00Z",
+      "payload": {"sourceIp": "10.0.0.1", "port": 443}
+    }
+  ]'
 ```
 
-### 4. Check Usage
+- Trả về `202 Accepted` (nếu hợp lệ).
+- Trả về `429 Too Many Requests` (nếu vượt quota hoàn toàn).
 
-```bash
-curl http://localhost:8080/api/v1/usage/<tenant-id>/current
-```
+### 4. Check Metrics
 
-### 5. Check Alerts
-
-```bash
-curl http://localhost:8080/api/v1/alerts?status=OPEN
-```
-
-### 6. Export CSV Report
-
-```bash
-curl -O http://localhost:8080/api/v1/reports/usage/csv?tenantId=<tenant-id>&month=2026-06
-```
-
-### 7. View Audit Logs
-
-```bash
-curl http://localhost:8080/api/v1/audit-logs
-```
+Xem metrics trong Grafana (http://localhost:3001) hoặc Dashboard UI (http://localhost:3000).
 
 ---
 
@@ -474,31 +326,14 @@ curl http://localhost:8080/api/v1/audit-logs
 ```
 soc-license-platform/
 ├── apps/
-│   ├── management-api-service/    # Control Plane (Spring Boot)
-│   │   └── src/main/java/com/vcs/management/
-│   │       ├── tenant/            # Tenant CRUD
-│   │       ├── license/           # License CRUD + Scheduler
-│   │       ├── alert/             # Alert Service + Scheduler + Controller
-│   │       ├── usage/             # Usage API (reads Redis counters)
-│   │       ├── report/            # CSV Report generation
-│   │       ├── audit/             # Audit logging
-│   │       └── common/            # Enums, exceptions, Redis sync
-│   │
-│   ├── collector-service/         # Data Plane (Spring Boot)
-│   │   └── src/main/java/com/vcs/collector/
-│   │       ├── collector/         # Batch event processing
-│   │       ├── quota/             # QuotaService + TokenBucketService
-│   │       ├── usagecounter/      # Redis EPS counters
-│   │       └── common/            # Enums, response wrapper
-│   │
+│   ├── management-api-service/    # Control Plane (Spring Boot - Java)
+│   ├── soc-intake-gateway/        # Data Plane (Go, Kafka, Redis, Prometheus)
 │   ├── frontend/                  # React Dashboard (Vite + TypeScript)
-│   │   └── src/
-│   │       ├── api/               # Axios API modules
-│   │       ├── pages/admin/       # Admin Dashboard, Tenants, Licenses, Audit
-│   │       └── pages/tenant/      # Tenant Dashboard (EPS chart, alerts)
-│   │
 │   └── event-producer/            # Mock Agent (Node.js + TypeScript)
-│
 ├── docker-compose.yml
+├── haproxy.cfg                    # HAProxy Load Balancer config
+├── prometheus/                    # Prometheus config
+├── grafana/                       # Grafana provisioning & dashboards
+├── keycloak/                      # Keycloak realm export
 └── README.md
 ```
