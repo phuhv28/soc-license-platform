@@ -24,43 +24,35 @@ A multi-tenant SOC/SIEM platform for managing EPS (Events Per Second) licenses, 
 
 The platform operates on a **Control Plane / Data Plane** split architecture. Here's how all the pieces work together:
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              CONTROL PLANE                                   │
-│                                                                              │
-│  ┌──────────┐     ┌──────────────────────────┐     ┌──────────────────────┐  │
-│  │ Frontend │────>│  Management API Service  │────>│     PostgreSQL       │  │
-│  │ :3000    │<────│  :8080                   │<────│     :5432            │  │
-│  └──────────┘     │                          │     └──────────────────────┘  │
-│                   │  • License CRUD          │                               │
-│                   │  • Tenant CRUD           │     ┌──────────────────────┐  │
-│                   │  • Alert Management      │────>│       Redis          │  │
-│                   │  • Usage APIs            │<────│       :6379          │  │
-│                   │  • CSV Reports           │     │                      │  │
-│                   │  • Audit Logging         │     │  • quota:{tenantId}  │  │
-│                   │  • Schedulers            │     │  • usage counters    │  │
-│                   │  • Billing Consumer      │     │  • token bucket      │  │
-│                   └─▲────────────────────────┘     └───────▲──────▲───────┘  │
-├─────────────────────│──────────────────────────────────────│──────│──────────┤
-│                     │         DATA PLANE                   │      │          │
-│               reads │                                reads │      │ writes   │
-│  ┌──────────────┐   │ ┌─────────┐      ┌───────────────────┴──────┴───────┐  │
-│  │Event Producer│───┼>│ HAProxy │─────>│        SOC Intake Gateway        │  │
-│  │(Mock Agent)  │   │ │ :4318   │      │        :8080 (internal)          │  │
-│  └──────────────┘   │ └─────────┘      │                                  │  │
-│                     │                  │  • Receive log events            │  │
-│                     │                  │  • Token bucket enforce          │  │
-│                     │                  │  • Update EPS counters           │  │
-│                     │                  └─────────────────┬────────────────┘  │
-│                     │                                    │                   │
-│                     │                                    ▼                   │
-│                     │                  ┌──────────────────────────────────┐  │
-│                     └──────────────────┤           Apache Kafka           │  │
-│                                        │           :9092                  │  │
-│                                        │  • Forward accepted logs         │  │
-│                                        │  • Billing metrics (5m window)   │  │
-│                                        └──────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph ControlPlane [CONTROL PLANE]
+        direction LR
+        Frontend["Frontend\n:3000"]
+        ManagementAPI["Management API Service\n:8080\n• License & Tenant CRUD\n• Alert Management\n• Usage APIs & Reports\n• Schedulers\n• Billing Consumer"]
+        Postgres[("PostgreSQL\n:5432")]
+        Redis[("Redis\n:6379\n• quota:{tenantId}\n• usage counters\n• token bucket")]
+
+        Frontend <--> ManagementAPI
+        ManagementAPI <--> Postgres
+        ManagementAPI <--> Redis
+    end
+
+    subgraph DataPlane [DATA PLANE]
+        direction LR
+        EventProducer["Event Producer\n(Mock Agent)"]
+        HAProxy["HAProxy\n:4318"]
+        IntakeGateway["SOC Intake Gateway\n:8080 (internal)\n• Receive log events\n• Token bucket enforce\n• Update EPS counters"]
+        Kafka[("Apache Kafka\n:9092\n• Forward accepted logs\n• Billing metrics (5m)")]
+
+        EventProducer --> HAProxy
+        HAProxy --> IntakeGateway
+        IntakeGateway --> Kafka
+    end
+
+    %% Cross Plane Connections
+    IntakeGateway == reads & writes ==> Redis
+    Kafka -.->|Billing metrics| ManagementAPI
 ```
 
 ### Step-by-Step Flow
