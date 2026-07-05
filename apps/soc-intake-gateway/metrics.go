@@ -70,12 +70,13 @@ func newTenantMetrics() *tenantMetrics {
 }
 
 type tenantState struct {
-	mu             sync.Mutex
-	tokens         int64
-	lastKnownQuota int64
-	metricsMu      sync.RWMutex
-	metrics        *tenantMetrics
-	kafkaMetrics   *tenantMetrics
+	mu                 sync.Mutex
+	tokens             int64
+	lastKnownQuota     int64
+	lastQuotaFetchedAt time.Time
+	metricsMu          sync.RWMutex
+	metrics            *tenantMetrics
+	kafkaMetrics       *tenantMetrics
 }
 
 func newTenantState() *tenantState {
@@ -150,25 +151,30 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 	if state.tokens < requested {
 		needed := requested - state.tokens
 
-		quotaStr, err := m.client.Get(ctx, "quota:"+tenantID).Result()
-		var quota int64
-		
-		if err == redis.Nil {
-			// Read-Through cache miss: fetch from API
-			quota = fetchQuotaFromAPI(tenantID)
-		} else if err == nil {
-			quota, _ = strconv.ParseInt(quotaStr, 10, 64)
-		}
+		var quota int64 = state.lastKnownQuota
 
-		if quota <= 0 {
-			// Resilience: fallback to local memory if Redis is down or API fails
-			if state.lastKnownQuota > 0 {
-				quota = state.lastKnownQuota
-			} else {
-				return 0 // No active license and no history
+		// Only fetch from Redis if we don't have a quota or if 1 hour has passed
+		if state.lastKnownQuota <= 0 || time.Since(state.lastQuotaFetchedAt) > time.Hour {
+			quotaStr, err := m.client.Get(ctx, "quota:"+tenantID).Result()
+			
+			if err == redis.Nil {
+				// Read-Through cache miss: fetch from API
+				quota = fetchQuotaFromAPI(tenantID)
+			} else if err == nil {
+				quota, _ = strconv.ParseInt(quotaStr, 10, 64)
 			}
-		} else {
-			state.lastKnownQuota = quota
+
+			if quota <= 0 {
+				// Resilience: fallback to local memory if Redis is down or API fails
+				if state.lastKnownQuota > 0 {
+					quota = state.lastKnownQuota
+				} else {
+					return 0 // No active license and no history
+				}
+			} else {
+				state.lastKnownQuota = quota
+				state.lastQuotaFetchedAt = time.Now()
+			}
 		}
 
 		// Dynamic Prefetching: Xin trước lượng token tương đương 2 giây Quota (tối thiểu 50)
