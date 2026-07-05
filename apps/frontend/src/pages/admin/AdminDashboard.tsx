@@ -215,8 +215,8 @@ export default function AdminDashboard() {
                     <td style={{ color: 'var(--color-text-secondary)' }}>{receivedEps} <span style={{ color: 'var(--color-text-muted)' }}>EPS</span></td>
                     <td><span style={{ fontWeight: 700, color: 'var(--color-success)' }}>{t.currentEps}</span> <span style={{ color: 'var(--color-text-muted)' }}>EPS</span></td>
                     <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <div className="progress-bar" style={{ height: 8 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+                        <div className="progress-bar" style={{ height: 8, width: '100%' }}>
                           <div className="progress-bar-fill success" style={{ width: `${acceptedPct}%` }} />
                           <div className="progress-bar-fill warning" style={{ width: `${droppedPct}%` }} />
                         </div>

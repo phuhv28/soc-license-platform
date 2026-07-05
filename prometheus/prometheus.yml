@@ -9,5 +9,8 @@ scrape_configs:
 
   - job_name: 'collector-gateway'
     metrics_path: '/metrics'
-    static_configs:
-      - targets: ['soc-intake-gateway:8080']
+    dns_sd_configs:
+      - names:
+          - 'soc-intake-gateway'
+        type: 'A'
+        port: 8080

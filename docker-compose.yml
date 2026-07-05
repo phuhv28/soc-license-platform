@@ -110,9 +110,9 @@ services:
     build:
       context: ./apps/event-producer
     deploy:
-      replicas: 1
+      replicas: 3
     environment:
-      TENANT_IDS: "146fcfa5-5ccb-4698-b02c-8b5c661a3c3e"
+      TENANT_IDS: "11111111-1111-1111-1111-111111111111"
       EPS: "100"
       BATCH_SIZE: "50"
       COLLECTOR_URL: "https://haproxy:4318"

@@ -214,8 +214,8 @@ function DimensionTable({ title, tenantId, dimension, window: win, colors }: Dim
                             : '—'}
                         </td>
                         <td>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                            <div className="progress-bar" style={{ height: 6 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
+                            <div className="progress-bar" style={{ height: 6, width: '100%' }}>
                               <div className="progress-bar-fill success" style={{ width: `${Math.min(acceptedPct, 100)}%` }} />
                               {droppedPct > 0 && <div className="progress-bar-fill warning" style={{ width: `${Math.min(droppedPct, 100)}%` }} />}
                             </div>
