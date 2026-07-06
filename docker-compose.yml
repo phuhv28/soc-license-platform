@@ -30,6 +30,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0
+    container_name: soc-redis-exporter
+    environment:
+      - REDIS_ADDR=redis://soc-redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
   kafka:
     image: apache/kafka:3.7.0
     container_name: soc-kafka
@@ -106,19 +117,19 @@ services:
       - management-api-service
 
 
-  event-producer:
-    build:
-      context: ./apps/event-producer
-    deploy:
-      replicas: 3
-    environment:
-      TENANT_IDS: "11111111-1111-1111-1111-111111111111"
-      EPS: "100"
-      BATCH_SIZE: "50"
-      COLLECTOR_URL: "https://haproxy:4318"
-      NODE_TLS_REJECT_UNAUTHORIZED: "0"
-    depends_on:
-      - haproxy
+  # event-producer:
+  #   build:
+  #     context: ./apps/event-producer
+  #   deploy:
+  #     replicas: 3
+  #   environment:
+  #     TENANT_IDS: "11111111-1111-1111-1111-111111111111"
+  #     EPS: "100"
+  #     BATCH_SIZE: "50"
+  #     COLLECTOR_URL: "https://haproxy:4318"
+  #     NODE_TLS_REJECT_UNAUTHORIZED: "0"
+  #   depends_on:
+  #     - haproxy
 
   haproxy:
     image: haproxy:2.8
