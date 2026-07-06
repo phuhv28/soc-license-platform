@@ -144,7 +144,7 @@ func (m *metricsManager) getTenantState(tenantID string) *tenantState {
 
 func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, requested int64) int64 {
 	state := m.getTenantState(tenantID)
-	
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -156,7 +156,7 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 		// Only fetch from Redis if we don't have a quota or if 1 hour has passed
 		if state.lastKnownQuota <= 0 || time.Since(state.lastQuotaFetchedAt) > time.Hour {
 			quotaStr, err := m.client.Get(ctx, "quota:"+tenantID).Result()
-			
+
 			if err == redis.Nil {
 				// Read-Through cache miss: fetch from API
 				quota = fetchQuotaFromAPI(tenantID)
@@ -215,7 +215,7 @@ func (m *metricsManager) requestTokens(ctx context.Context, tenantID string, req
 
 func (m *metricsManager) recordMetrics(tenantID, agentName, logSource string, received, accepted, dropped int64) {
 	state := m.getTenantState(tenantID)
-	
+
 	state.metricsMu.Lock()
 	defer state.metricsMu.Unlock()
 
@@ -226,7 +226,7 @@ func (m *metricsManager) recordMetrics(tenantID, agentName, logSource string, re
 	state.kafkaMetrics.TotalReceived += received
 	state.kafkaMetrics.TotalAccepted += accepted
 	state.kafkaMetrics.TotalDropped += dropped
-	
+
 	if _, ok := state.metrics.AgentMetrics[agentName]; !ok {
 		state.metrics.AgentMetrics[agentName] = &tenantDimensionMetrics{}
 	}
@@ -275,7 +275,7 @@ func (m *metricsManager) flushToRedis() {
 
 	for _, tenantID := range tenantIDs {
 		state := m.getTenantState(tenantID)
-		
+
 		state.metricsMu.Lock()
 		currentMetrics := state.metrics
 		state.metrics = newTenantMetrics()
@@ -344,7 +344,7 @@ func (m *metricsManager) flushToKafka() {
 
 	for _, tenantID := range tenantIDs {
 		state := m.getTenantState(tenantID)
-		
+
 		state.metricsMu.Lock()
 		currentMetrics := state.kafkaMetrics
 		state.kafkaMetrics = newTenantMetrics()
@@ -447,7 +447,7 @@ func fetchQuotaFromAPI(tenantID string) int64 {
 	if apiURL == "" {
 		return 0
 	}
-	
+
 	url := fmt.Sprintf("%s/api/v1/internal/quotas/%s", apiURL, tenantID)
 	resp, err := httpClient.Get(url)
 	if err != nil {

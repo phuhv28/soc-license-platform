@@ -34,10 +34,9 @@ public class LicenseExpirationScheduler {
     }
 
     /**
-     * Runs every 5 minutes for testing purposes.
-     * (Originally: 0 0 8 * * * - every day at 08:00)
+     * Runs every day at 08:00 AM.
      */
-    @Scheduled(cron = "0 */5 * * * *")
+    @Scheduled(cron = "0 0 8 * * *")
     public void checkExpiringLicenses() {
         log.info("Running license expiration check...");
 
